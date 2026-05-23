@@ -42,18 +42,16 @@ from mini_omni3.dataset.tokens import (
 )
 from mini_omni3.generate.base import (
     AUDIO_TOKENS_PER_CHUNK, SYSTEM_PROMPT,
-    load_audio_encoder, load_model, sample, set_seed,
+    load_audio_encoder, load_model, resolve_checkpoint_paths, sample, set_seed,
 )
 from mini_omni3.tokenizer import Tokenizer
 from mini_omni3.utils import get_default_supported_precision
 
 
-# Layout under <repo>/checkpoint/ — see README for what to put there.
-_CKPT = Path(__file__).resolve().parent.parent / "checkpoint"
-MODEL_CONFIG_DIR   = str(_CKPT / "model_config")
-TRAINED_CHECKPOINT = str(_CKPT / "state_dict.pt")
-QWEN_OMNI_CKPT     = str(_CKPT / "qwen2.5-omni_config")
-AUDIO_TOWER_CKPT   = str(_CKPT / "audio_tower.pth")
+# Single source of truth for all weights — see README for the expected layout.
+CHECKPOINT_DIR = Path(__file__).resolve().parent.parent / "checkpoint"
+MODEL_CONFIG_DIR, TRAINED_CHECKPOINT, QWEN_OMNI_CKPT, AUDIO_TOWER_CKPT = \
+    resolve_checkpoint_paths(str(CHECKPOINT_DIR))
 
 
 # === Audio framing constants (must match what the frontend sends) ===

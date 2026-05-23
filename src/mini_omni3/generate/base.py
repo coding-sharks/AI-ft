@@ -251,12 +251,28 @@ def load_audio_encoder(qwen_omni_ckpt, audio_tower_ckpt, device):
     return encoder
 
 
+def resolve_checkpoint_paths(checkpoint_dir: str):
+    """Map a single checkpoint root → (model_config_dir, trained_checkpoint,
+    qwen_omni_ckpt, audio_tower_ckpt). The release layout is:
+
+        <checkpoint_dir>/
+            model_config.yaml + tokenizer.json + ...   ← model_config_dir = root
+            MiniOmni3_LM.pt
+            MiniOmni3_ChunkwisedEncoder.pth
+            qwen_2_5_omni_config/
+    """
+    ckpt = Path(checkpoint_dir)
+    return (
+        str(ckpt),
+        str(ckpt / "MiniOmni3_LM.pt"),
+        str(ckpt / "qwen_2_5_omni_config"),
+        str(ckpt / "MiniOmni3_ChunkwisedEncoder.pth"),
+    )
+
+
 def run_inference(
     *,
-    model_config_dir: str,
-    trained_checkpoint: str,
-    qwen_omni_ckpt: str,
-    audio_tower_ckpt: str,
+    checkpoint_dir: str,
     rounds: int = 10,
     audio_paths: Optional[List[str]] = None,
     seed: int = 1337,
@@ -268,14 +284,10 @@ def run_inference(
     If `audio_paths` is given, runs one round per path non-interactively
     (offline mode). Otherwise prompts stdin each round (online mode).
     """
-    for name, value in [
-        ("model_config_dir", model_config_dir),
-        ("trained_checkpoint", trained_checkpoint),
-        ("qwen_omni_ckpt", qwen_omni_ckpt),
-        ("audio_tower_ckpt", audio_tower_ckpt),
-    ]:
-        if not value:
-            raise RuntimeError(f"`{name}` is empty — set it before calling run_inference().")
+    if not checkpoint_dir:
+        raise RuntimeError("`checkpoint_dir` is empty — set it before calling run_inference().")
+    model_config_dir, trained_checkpoint, qwen_omni_ckpt, audio_tower_ckpt = \
+        resolve_checkpoint_paths(checkpoint_dir)
 
     set_seed(seed)
     fabric = L.Fabric(

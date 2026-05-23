@@ -110,13 +110,17 @@ Both `assets/infer_*.py` and `web/server.py` read everything from a single
 ```
 Mini-Omni3/
 ├── assets/
-│   ├── infer_online.py         streaming entry (prompts for an audio path each round)
-│   └── infer_offline.py        one-shot entry (edit AUDIO_PATH at the top)
-├── checkpoint/                 (you create this)
-│   ├── model_config/           model_config.yaml + tokenizer files (our HF release)
-│   ├── qwen2.5-omni_config/    Qwen2.5-Omni-3B from the official HF repo
-│   ├── state_dict.pt           trained GPT weights (our HF release)
-│   └── audio_tower.pth         wrapped audio_tower, proj.* baked in (our HF release)
+│   ├── infer_online.py                  streaming entry (prompts for an audio path each round)
+│   └── infer_offline.py                 one-shot entry (edit AUDIO_PATH at the top)
+├── checkpoint/                          (you create this)
+│   ├── model_config.yaml                ┐
+│   ├── tokenizer.json                   │  our HF release (drop the files at the root)
+│   ├── tokenizer_config.json            │
+│   ├── config.json                      │
+│   ├── generation_config.json           ┘
+│   ├── MiniOmni3_LM.pt                  trained GPT weights (our HF release)
+│   ├── MiniOmni3_ChunkwisedEncoder.pth  wrapped audio_tower, proj.* baked in (our HF release)
+│   └── qwen_2_5_omni_config/            Qwen2.5-Omni-3B config dir from the official HF repo
 └── ...
 ```
 
@@ -124,10 +128,10 @@ Sources:
 
 | Item | Where to get it |
 |---|---|
-| `checkpoint/model_config/`  | Our HuggingFace release |
-| `checkpoint/state_dict.pt`  | Our HuggingFace release (or extract from your own training: `python src/mini_omni3/finetune/extract_state_dict.py <out_dir>/step-NNNNNN/lit_model.pth checkpoint/state_dict.pt`) |
-| `checkpoint/audio_tower.pth`| Our HuggingFace release (produced by `src/mini_omni3/finetune/wrap_audio_tower.py`) |
-| `checkpoint/qwen2.5-omni_config/` | [Qwen/Qwen2.5-Omni-3B](https://huggingface.co/Qwen/Qwen2.5-Omni-3B) |
+| Files at `checkpoint/` root (`model_config.yaml`, `tokenizer*.json`, `config.json`, `generation_config.json`) | Our HuggingFace release |
+| `checkpoint/MiniOmni3_LM.pt`                 | Our HuggingFace release (or extract from your own training: `python src/mini_omni3/finetune/extract_state_dict.py <out_dir>/step-NNNNNN/lit_model.pth checkpoint/MiniOmni3_LM.pt`) |
+| `checkpoint/MiniOmni3_ChunkwisedEncoder.pth` | Our HuggingFace release (produced by `src/mini_omni3/finetune/wrap_audio_tower.py`) |
+| `checkpoint/qwen_2_5_omni_config/`           | [Qwen/Qwen2.5-Omni-3B](https://huggingface.co/Qwen/Qwen2.5-Omni-3B) |
 
 Once `checkpoint/` is filled in, run either mode:
 
