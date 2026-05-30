@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/figures/top.png" alt="Mini-Omni3 Logo" width="100%">
+  <img src="assets/figures/top.png" alt="Mini-Omni3 Logo" width="80%">
 </p>
 
 
@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=r1S4xiUBg9s">
-    <img src="https://img.youtube.com/vi/r1S4xiUBg9s/maxresdefault.jpg" alt="Watch Mini-Omni3 running live" width="70%">
+    <img src="https://img.youtube.com/vi/r1S4xiUBg9s/maxresdefault.jpg" alt="Watch Mini-Omni3 running live" width="95%">
   </a>
 </p>
 <p align="center"><em>▶ Click to watch Mini-Omni3 listen, decide, and speak — live (YouTube)</em></p>
