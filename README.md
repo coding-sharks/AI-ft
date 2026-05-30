@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/figures/logo.jpg" alt="Mini-Omni3 Logo" width="15%">
+  <img src="assets/figures/top.png" alt="Mini-Omni3 Logo" width="100%">
 </p>
 
 
