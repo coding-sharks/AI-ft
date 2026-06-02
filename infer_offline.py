@@ -68,35 +68,60 @@ def run_inference(
     finally:
         model.clear_kv_cache()
 
-def load_audio_paths(input_path: str) -> List[str]:
-    """Resolve `input_path` into an ordered list of audio files.
+AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".opus", ".aac"}
 
-    Accepts either a single audio file (returned as a one-element list), or a
-    .json file containing a plain list of path strings, e.g.:
 
-        ["a.wav", "b.wav", "c.wav"]
-
-    The files are fed sequentially into a single offline session (pseudo-online:
-    context accumulates across files). Relative paths inside the JSON are
-    resolved against the JSON file's directory.
-    """
-    p = Path(input_path)
-    if p.suffix.lower() != ".json":
-        return [input_path]
-
+def _load_sequence_json(p: Path) -> List[str]:
+    """Read a sequence.json (a plain list of path strings) and resolve relative
+    entries against the JSON file's directory."""
     with open(p, "r", encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, list):
-        raise ValueError(f"Expected a JSON list of audio paths in {input_path}, got {type(data).__name__}.")
-
+        raise ValueError(f"Expected a JSON list of audio paths in {p}, got {type(data).__name__}.")
     base_dir = p.parent
     return [str(base_dir / a) if not Path(a).is_absolute() else a for a in data]
 
 
-# A single audio file, or a .json listing multiple audios, e.g. ["a.wav", "b.wav"].
-# You can also point this at one of the bundled sample sequences, e.g.
-#   sample/01_count_bark/sequence.json, sample/02_translate/sequence.json, sample/03_cough_music/sequence.json
-input_path = "sample/01_count_bark/sequence.json"
+def load_audio_paths(input_path: str) -> List[str]:
+    """Resolve `input_path` into an ordered list of audio files. Layered:
+
+      1. A single audio file        -> processed directly.
+      2. A folder with sequence.json -> the order listed in that sequence.json.
+      3. A folder of audio files     -> files sorted by name; the order is
+                                        printed and you must type 'yes' to go on.
+
+    A .json file may also be passed directly (same as case 2). The files are fed
+    sequentially into a single offline session (pseudo-online: context
+    accumulates across files).
+    """
+    p = Path(input_path)
+
+    if p.is_file():
+        if p.suffix.lower() == ".json":
+            return _load_sequence_json(p)
+        return [input_path]
+
+    if p.is_dir():
+        seq = p / "sequence.json"
+        if seq.is_file():
+            return _load_sequence_json(seq)
+
+        files = sorted(f for f in p.iterdir() if f.is_file() and f.suffix.lower() in AUDIO_EXTS)
+        if not files:
+            raise ValueError(f"No audio files found in {input_path}")
+        print(f"No sequence.json in {input_path}; using default order:")
+        for i, f in enumerate(files):
+            print(f"  [{i}] {f.name}")
+        if input("Proceed with this order? type 'yes' to continue: ").strip().lower() not in ("yes", "y"):
+            raise SystemExit("Aborted by user.")
+        return [str(f) for f in files]
+
+    raise ValueError(f"Input not found: {input_path}")
+
+
+# A single audio file, or a folder (with a sequence.json, or just loose audio files).
+# Bundled samples, e.g. sample/01_count_bark, sample/02_translate, sample/03_cough_music
+input_path = "sample/01_count_bark"
 audio_paths = load_audio_paths(input_path)
 
 run_inference(checkpoint_dir="./checkpoints",
