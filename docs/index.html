@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Audio-Interaction: A Unified Audio Interaction Model</title>
+<title>Audio Interaction Model</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -167,7 +167,7 @@
   table.compare tbody td { padding:16px 14px; vertical-align:top; border-bottom:1px solid var(--rule); text-align:left; color:var(--ink-soft); line-height:1.5; font-size:13.5px; }
   table.compare tbody tr:last-child td { border-bottom:none; }
 
-  .col-clip { width:18%; } .col-ours { width:34%; } .col-other { width:24%; }
+  .col-clip { width:16%; } .col-ours { width:28%; } .col-other { width:28%; }
 
   .clip-cell { background:var(--bg-soft); text-align:center; }
   .clip-cell audio { display:block; width:100%; max-width:190px; height:34px; margin:0 auto 12px; outline:none; }
@@ -180,15 +180,14 @@
   table.compare thead th.ours-col { background: linear-gradient(180deg, rgba(191,210,252,0.55) 0%, rgba(219,232,254,0.7) 100%); }
   table.compare thead th.ours-col .model-name { color:var(--accent); font-weight:700; }
 
-  /* interleaved silence / response stream */
-  .stream { margin:0; background:var(--code-bg); border-radius:10px; padding:14px 16px; font-family:'JetBrains Mono', ui-monospace, monospace; font-size:12.5px; line-height:1.9; }
-  .stream .sil { color:#7f8a99; }
-  .stream .sep { color:#3a4654; padding:0 3px; }
-  .stream .out { color:#aee571; font-weight:500; }
-
-  .other-out .stat { display:inline-flex; align-items:center; gap:5px; margin-bottom:6px; font-weight:600; font-size:12px; letter-spacing:0.02em; }
-  .other-out .stat.warn { color:#b45309; }
-  .other-out .stat.bad { color:#b91c1c; }
+  /* round-aligned streaming response cells, colour-coded per model */
+  .stream { margin:0; background:var(--code-bg); border-radius:10px; padding:14px 16px; font-family:'JetBrains Mono', ui-monospace, monospace; font-size:12.5px; line-height:1.85; overflow-wrap:anywhere; word-break:break-word; }
+  .stream .sil   { color:#7f8a99; }
+  .stream .empty { color:#8590a0; font-style:italic; }
+  .stream .out      { color:#aee571; font-weight:500; }                 /* Audio-Interaction (green) */
+  .stream .gpt-out  { color:#f0b870; }                                   /* gpt-realtime (warm amber) */
+  .stream .seed-out { color:#8dd0d8; }                                   /* seeduplex (cool teal) */
+  .stream .sep   { color:#566374; padding:0 5px; font-weight:600; }      /* the / between rounds */
 
   /* ----------------- Big figure / dataset ----------------- */
   .big-figure { margin:0 auto; width:90%; border:1px solid var(--rule); border-radius:14px; overflow:hidden; background:var(--bg-soft); box-shadow:0 2px 14px rgba(0,0,0,0.04); }
@@ -307,6 +306,7 @@
     #cursor-glow { display: none; }
     .cursor-ripple { display: none; }
   }
+}  
 </style>
 </head>
 <body>
@@ -324,8 +324,7 @@
     <h1 class="paper-title">
       <span class="title-rule title-rule-top"></span>
       <span class="paper-fulltitle" data-i18n="paperTitle">
-        <span class="paper-name">Audio-Interaction:</span> Towards Unified Audio Interaction Models<br/>
-        that Continuously Perceive, Decide and Respond
+        <span class="paper-name">Audio Interaction Model</span>
       </span>
       <span class="title-rule title-rule-bottom"></span>
     </h1>
@@ -336,15 +335,17 @@
       <span class="name">Zhifei Xie</span><sup>1*</sup>,
       <span class="name">Zihang Liu</span><sup>2*</sup>,
       <span class="name">Ze An</span><sup>2</sup>,
+      <span class="name">Xiaobin Hu</span><sup>2</sup>,
+      <span class="name">Yue Liao</span><sup>2</sup><br/>
       <span class="name">Ziyang Ma</span><sup>1</sup>,
-      <span class="name">Xiaobin Hu</span><sup>2</sup><br/>
+      <span class="name">Dongchao Yang</span><sup>3</sup>,
       <span class="name">Mingbao Lin</span><sup>2&dagger;</sup>,
-      <span class="name">Deheng Ye</span><sup>1&dagger;</sup>,
+      <span class="name">Deheng Ye</span><sup>1&dagger;</sup><br/>
       <span class="name">Shuicheng Yan</span><sup>2&dagger;</sup>,
       <span class="name">Chunyan Miao</span><sup>1&dagger;</sup>
     </p>
     <p class="affiliations" data-i18n="affiliations">
-      <span class="aff-num">1</span>NTU &nbsp;&nbsp; <span class="aff-num">2</span>NUS
+      <span class="aff-num">1</span>NTU &nbsp;&nbsp; <span class="aff-num">2</span>NUS &nbsp;&nbsp; <span class="aff-num">3</span>CUHK
     </p>
 
     <!-- ===================== HERO (top.png) ===================== -->
@@ -359,7 +360,7 @@
 
     <!-- ===================== LINK BUTTONS (5) ===================== -->
     <div class="link-row">
-      <a href="https://arxiv.org/abs/2605.XXXXX" class="pill dark" target="_blank" rel="noopener noreferrer">
+      <a href="https://arxiv.org/pdf/2606.05121" class="pill dark" target="_blank" rel="noopener noreferrer">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
         <span data-i18n="btnReport">Technical Report</span>
       </a>
@@ -406,8 +407,8 @@
   <!-- ===================== SAMPLES ===================== -->
   <section class="block">
     <div class="section-head">
-      <h2 data-i18n="samplesH2">Native Streaming Audio Understanding</h2>
-      <p data-i18n="samplesIntro">Audio-Interaction is trained for native streaming audio understanding: every task stops being a separate model and becomes a single instruction inside one model. It goes further than instructions. With no prompt at all, it decides on its own when a moment is worth speaking to, and acts proactively.</p>
+      <h2 data-i18n="samplesH2">Comparison with SOTA Streaming Models</h2>
+      <p data-i18n="samplesIntro">Same continuous audio stream, three models side by side. Each receives identical input; only Audio-Interaction emits a meaningful, round-by-round response as each event lands.</p>
     </div>
 
     <div class="table-wrap">
@@ -417,8 +418,8 @@
             <tr>
               <th class="col-clip" data-i18n="thClip">Clip</th>
               <th class="col-ours ours-col"><span class="model-name">Audio-Interaction</span><span class="vendor ours">[Ours]</span></th>
-              <th class="col-other"><span class="model-name">gpt-audio</span><span class="vendor">by OpenAI</span></th>
-              <th class="col-other"><span class="model-name">gemini-omni</span><span class="vendor">by Google</span></th>
+              <th class="col-other"><span class="model-name">gpt-realtime</span><span class="vendor">by OpenAI</span></th>
+              <th class="col-other"><span class="model-name">seeduplex</span><span class="vendor">by ByteDance Seed</span></th>
             </tr>
           </thead>
           <tbody>
@@ -431,10 +432,14 @@
                 <span class="clip-scene" data-i18n="s1Scene">Counting a repeating sound, live</span>
               </td>
               <td class="ours-col">
-                <div class="stream"><span class="sil">&#10216;Silence&#10217; &times; 14</span><span class="sep">|</span><span class="out">once!</span><span class="sep">|</span><span class="sil">&#10216;Silence&#10217; &times; 4</span><span class="sep">|</span><span class="out">twice!</span><span class="sep">|</span><span class="sil">&#10216;Silence&#10217; &times; 4</span><span class="sep">|</span><span class="out">three times!</span><span class="sep">|</span><span class="sil">&#10216;Silence&#10217; &times; 4</span><span class="sep">|</span><span class="out">four times!</span><span class="sep">|</span><span class="sil">&#10216;Silence&#10217; &times; 4</span><span class="sep">|</span><span class="out">five times!</span></div>
+                <div class="stream"><span class="out">once!</span><span class="sep">/</span><span class="out">twice!</span><span class="sep">/</span><span class="out">three times!</span><span class="sep">/</span><span class="out">four times!</span><span class="sep">/</span><span class="out">five times!</span></div>
               </td>
-              <td class="other-out"><span class="stat bad">&#10060; Record then infer</span><br/><span data-i18n="s1Gpt">Waits for the whole clip, then returns one summary. Never produces a running count as each event lands.</span></td>
-              <td class="other-out"><span class="stat warn">&#9888; Buffered window</span><br/><span data-i18n="s1Gemini">Buffers a fixed window first, so it lags behind the sound and cannot emit a live tally.</span></td>
+              <td>
+                <div class="stream"><span class="empty">&lt;Empty&gt;</span><span class="sep">/</span><span class="empty">&lt;Empty&gt;</span><span class="sep">/</span><span class="empty">&lt;Empty&gt;</span><span class="sep">/</span><span class="empty">&lt;Empty&gt;</span><span class="sep">/</span><span class="empty">&lt;Empty&gt;</span></div>
+              </td>
+              <td>
+                <div class="stream"><span class="empty">&lt;Empty&gt;</span><span class="sep">/</span><span class="empty">&lt;Empty&gt;</span><span class="sep">/</span><span class="empty">&lt;Empty&gt;</span><span class="sep">/</span><span class="empty">&lt;Empty&gt;</span><span class="sep">/</span><span class="empty">&lt;Empty&gt;</span></div>
+              </td>
             </tr>
 
             <!-- Sample 2: music -->
@@ -445,10 +450,14 @@
                 <span class="clip-scene" data-i18n="s2Scene">A cough, then background music</span>
               </td>
               <td class="ours-col">
-                <div class="stream"><span class="sil">&#10216;Silence&#10217; &times; 6</span><span class="sep">|</span><span class="out">It sounds like you're coughing; please take care and drink some water.</span><span class="sep">|</span><span class="sil">&#10216;Silence&#10217; &times; 29</span><span class="sep">|</span><span class="out">The style of the music clip is likely jazz, characterized by its instrumental focus on improvisation and complex harmonies.</span></div>
+                <div class="stream"><span class="out">It sounds like you're coughing; please take care and drink some water.</span><span class="sep">/</span><span class="out">The style of the music clip is likely jazz, characterized by its instrumental focus on improvisation and complex harmonies.</span></div>
               </td>
-              <td class="other-out"><span class="stat warn">&#9888; Ignores non-speech</span><br/><span data-i18n="s2Gpt">Treats the music as noise and stays silent on the cough unless it is explicitly asked.</span></td>
-              <td class="other-out"><span class="stat warn">&#9888; Cannot fuse events</span><br/><span data-i18n="s2Gemini">Can identify the music alone, but misses the cough and cannot connect the two events.</span></td>
+              <td>
+                <div class="stream"><span class="empty">&lt;Empty&gt;</span><span class="sep">/</span><span class="gpt-out">I can tell you whether I think a piece of music is effective, interesting, well-crafted, emotionally expressive, etc. But I don't have personal likes or dislikes.</span></div>
+              </td>
+              <td>
+                <div class="stream"><span class="empty">&lt;Empty&gt;</span><span class="sep">/</span><span class="empty">&lt;Empty&gt;</span></div>
+              </td>
             </tr>
 
           </tbody>
@@ -529,8 +538,7 @@
 
       <div class="result-card proactive">
         <p class="panel-eyebrow" data-i18n="rcTag3">Proactive</p>
-        <h3 class="panel-title" data-i18n="rcTitle3">Best-in-class context-aware 
-          proactive intervention</h3>
+        <h3 class="panel-title" data-i18n="rcTitle3">Best-in-class intervention</h3>
         <p class="panel-body" data-i18n="rcBody3">The strongest proactive intervention of any model we test: it knows not just what to say, but when to say it.</p>
         <img src="figures/result2.png" alt="Proactive intervention results" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';" />
         <div class="panel-placeholder" style="display:none;">[ figures/result2.png ]</div>
@@ -544,7 +552,7 @@
 <!-- ===================== EXPERIENCE (mountain, full width) ===================== -->
 <section class="experience">
   <div class="mountain-stage">
-    <img class="mountain-img" src="figures/background.jpeg" alt="Snowy mountain"
+    <img class="mountain-img" src="figures/background.png" alt="Snowy mountain"
          onerror="this.style.display='none'; this.nextElementSibling.style.display='block';" />
     <div class="mountain-fallback" style="display:none;"></div>
     <div class="mountain-content">
@@ -562,7 +570,7 @@
 <script>
   // ---------- Title auto-fit: keep it to at most 2 lines ----------
   (function() {
-    var MAX = 29, MIN = 15;
+    var MAX = 46, MIN = 18;
     function lineCount(el, lh) { return Math.round(el.offsetHeight / lh); }
     function fitTitle() {
       var el = document.querySelector('.paper-fulltitle');
@@ -606,23 +614,19 @@
   (function() {
     var dict = {
       en: {
-        paperTitle: '<span class="paper-name">Audio-Interaction:</span> Towards Unified Audio Interaction Models<br/>that Continuously Perceive, Decide and Respond',
+        paperTitle: '<span class="paper-name">Audio Interaction Model</span>',
         missionLine: '<span class="open-badge">Fully Open</span>The next-generation audio-language model. A <strong>streaming brain for interaction</strong>.',
-        authors: '<span class="name">Zhifei Xie</span><sup>1*</sup>, <span class="name">Zihang Liu</span><sup>2*</sup>, <span class="name">Ze An</span><sup>2</sup>, <span class="name">Ziyang Ma</span><sup>1</sup>, <span class="name">Xiaobin Hu</span><sup>2</sup><br/><span class="name">Mingbao Lin</span><sup>2&dagger;</sup>, <span class="name">Deheng Ye</span><sup>1&dagger;</sup>, <span class="name">Shuicheng Yan</span><sup>2&dagger;</sup>, <span class="name">Chunyan Miao</span><sup>1&dagger;</sup>',
-        affiliations: '<span class="aff-num">1</span>NTU &nbsp;&nbsp; <span class="aff-num">2</span>NUS',
+        authors: '<span class="name">Zhifei Xie</span><sup>1*</sup>, <span class="name">Zihang Liu</span><sup>2*</sup>, <span class="name">Ze An</span><sup>2</sup>, <span class="name">Xiaobin Hu</span><sup>2</sup>, <span class="name">Yue Liao</span><sup>2</sup><br/><span class="name">Ziyang Ma</span><sup>1</sup>, <span class="name">Dongchao Yang</span><sup>3</sup>, <span class="name">Mingbao Lin</span><sup>2&dagger;</sup>, <span class="name">Deheng Ye</span><sup>1&dagger;</sup><br/><span class="name">Shuicheng Yan</span><sup>2&dagger;</sup>, <span class="name">Chunyan Miao</span><sup>1&dagger;</sup>',
+        affiliations: '<span class="aff-num">1</span>NTU &nbsp;&nbsp; <span class="aff-num">2</span>NUS &nbsp;&nbsp; <span class="aff-num">3</span>CUHK',
         paperAbstract: 'Audio is an inherently interactive modality, yet today&rsquo;s Large Audio Language Models are offline, and streaming ones each handle only a single task such as streaming ASR or voice chatting. We formalize a new paradigm, the <strong>Audio Interaction Model</strong>, and realize it with <strong>Audio-Interaction</strong>: a unified streaming model that, through an always-on <strong>perceive-decide-respond loop</strong>, listens to sound, environment, and instructions in real time and decides on its own <strong>when to respond</strong> from the semantics of the stream. A single architecture unifies all offline and real-time tasks and gives rise to many new capabilities.',
         btnReport: 'Technical Report', btnTry: 'Try Audio-Interaction',
         videoLabel: 'Watch Audio-Interaction listen, decide and speak, live',
 
-        samplesH2: 'Native Streaming Audio Understanding',
-        samplesIntro: 'Audio-Interaction is trained for native streaming audio understanding: every task stops being a separate model and becomes a single instruction inside one model. It goes further than instructions. With no prompt at all, it decides on its own when a moment is worth speaking to, and acts proactively.',
+        samplesH2: 'Comparison with SOTA Streaming Models',
+        samplesIntro: 'Same continuous audio stream, three models side by side. Each receives identical input; only Audio-Interaction emits a meaningful, round-by-round response as each event lands.',
         thClip: 'Clip',
         s1Scene: 'Counting a repeating sound, live',
-        s1Gpt: 'Waits for the whole clip, then returns one summary. Never produces a running count as each event lands.',
-        s1Gemini: 'Buffers a fixed window first, so it lags behind the sound and cannot emit a live tally.',
         s2Scene: 'A cough, then background music',
-        s2Gpt: 'Treats the music as noise and stays silent on the cough unless it is explicitly asked.',
-        s2Gemini: 'Can identify the music alone, but misses the cough and cannot connect the two events.',
 
         sfH2: 'SoundFlow: training models with an always-on perceive-decide-respond loop',
         sfCaption: 'The real world never pauses to hand over a finished clip, so an interaction model has to keep listening and decide for itself, instant by instant, whether this moment deserves a reply. That moves audio modeling <strong>from answering finished clips to running a continuous loop</strong>, and <strong>from a stack of single-task models to one model</strong> where recognition, translation and dialogue are all instructions inside the same always-on stream. <span class="lead">SoundFlow</span> covers the whole pipeline: stitching short clips into long interactions for data, <strong>chunk-level decision training</strong> with history review and comprehension-aware silence, and <strong>asynchronous FIFO inference</strong> that cuts first-frame latency by <em>4.5&times;</em>.',
@@ -634,10 +638,8 @@
 
         resH2: 'Results',
         resIntro: 'Audio-Interaction keeps its foundational capabilities intact while becoming markedly stronger on speech-driven input, and it shows the strongest proactive intervention of every model we compare against.',
-        resTab1: 'Foundation', resTab2: 'Speech input', resTab3: 'Proactive',
         rcTag1: 'Foundation', rcTitle1: 'Basic ability preserved', rcBody1: 'Offline recognition and translation stay on par with strong baselines, so nothing is lost by going always-on.',
-        rcTag2: 'Speech input', rcTitle2: 'Markedly stronger', rcBody2: 'On speech-driven tasks the model is clearly stronger, tracking and responding to live speech as it arrives.',
-        rcTag3: 'Proactive', rcTitle3: 'Best-in-class context-aware intervention', rcBody3: 'The strongest proactive intervention of any model we test: it knows not just what to say, but when to say it.',
+        rcTag3: 'Proactive', rcTitle3: 'Best-in-class intervention', rcBody3: 'The strongest proactive intervention of any model we test: it knows not just what to say, but when to say it.',
 
         expH: 'Experience Audio-Interaction',
         expSub: 'One unbroken session, one model. It listens, decides, and speaks, live.',
@@ -645,23 +647,19 @@
         expFoot: 'Offline audio answers a finished clip. Real audio needs a model that keeps listening, and decides, moment to moment, when to speak.'
       },
       zh: {
-        paperTitle: '<span class="paper-name">Audio-Interaction：</span> 迈向统一的 Audio Interaction Model<br/>持续地感知、决策与响应',
+        paperTitle: '<span class="paper-name">Audio Interaction Model</span>',
         missionLine: '<span class="open-badge">Fully Open</span>下一代音频语言模型。一颗<strong>用于交互的流式大脑</strong>。',
-        authors: '<span class="name">谢知非</span><sup>1*</sup>，<span class="name">刘子航</span><sup>2*</sup>，<span class="name">安泽</span><sup>2</sup>，<span class="name">马子阳</span><sup>1</sup>，<span class="name">胡晓彬</span><sup>2</sup><br/><span class="name">林明宝</span><sup>2&dagger;</sup>，<span class="name">叶德珩</span><sup>1&dagger;</sup>，<span class="name">颜水成</span><sup>2&dagger;</sup>，<span class="name">缪春燕</span><sup>1&dagger;</sup>',
-        affiliations: '<span class="aff-num">1</span>南洋理工大学（NTU） &nbsp;&nbsp; <span class="aff-num">2</span>新加坡国立大学（NUS）',
+        authors: '<span class="name">谢知非</span><sup>1*</sup>，<span class="name">刘子航</span><sup>2*</sup>，<span class="name">安泽</span><sup>2</sup>，<span class="name">胡晓彬</span><sup>2</sup>，<span class="name">廖越</span><sup>2</sup><br/><span class="name">马子阳</span><sup>1</sup>，<span class="name">杨东超</span><sup>3</sup>，<span class="name">林明宝</span><sup>2&dagger;</sup>，<span class="name">叶德珩</span><sup>1&dagger;</sup><br/><span class="name">颜水成</span><sup>2&dagger;</sup>，<span class="name">缪春燕</span><sup>1&dagger;</sup>',
+        affiliations: '<span class="aff-num">1</span>南洋理工大学（NTU） &nbsp;&nbsp; <span class="aff-num">2</span>新加坡国立大学（NUS） &nbsp;&nbsp; <span class="aff-num">3</span>香港中文大学（CUHK）',
         paperAbstract: '音频本质上是一种交互式模态，然而当今的大型音频语言模型仍是<strong>离线</strong>的，而流式模型又各自只能处理<strong>单一任务</strong>，例如流式 ASR 或语音对话。我们形式化了一个新范式——<strong>Audio Interaction Model</strong>，并以 <strong>Audio-Interaction</strong> 将其实现：一个统一的流式模型，通过常驻的 <strong>perceive-decide-respond 闭环</strong>，实时聆听声音、环境与指令，并从音频流的语义中自行决定<strong>何时响应</strong>。单一架构统一了所有离线与实时任务，并催生出许多全新的能力。',
         btnReport: '技术报告', btnTry: '试用 Audio-Interaction',
         videoLabel: '观看 Audio-Interaction 实时聆听、决策与开口',
 
-        samplesH2: '原生流式音频理解',
-        samplesIntro: 'Audio-Interaction 面向原生流式音频理解进行训练：每个任务不再需要一个单独的模型，而只是同一个模型里的一条指令。它甚至比指令走得更远，在没有任何提示时也能自行判断此刻是否值得开口，主动介入。',
+        samplesH2: '与当前 SOTA 流式模型对比',
+        samplesIntro: '同一条连续音频流，三个模型并排比较。每个模型接收完全相同的输入，只有 Audio-Interaction 能随每个事件落地、按轮次地给出实质性的回应。',
         thClip: '音频',
         s1Scene: '对重复出现的声音实时计数',
-        s1Gpt: '等整段音频结束才返回一句总结，无法在每个事件落地时给出实时计数。',
-        s1Gemini: '先缓冲一个固定窗口，因而滞后于声音，无法输出实时计数。',
         s2Scene: '先是一声咳嗽，随后是背景音乐',
-        s2Gpt: '把音乐当作噪声，且不被明确询问就不会回应咳嗽。',
-        s2Gemini: '能单独识别音乐，却遗漏咳嗽，也无法把这两个事件联系起来。',
 
         sfH2: 'SoundFlow：用常驻的 perceive-decide-respond 闭环训练模型',
         sfCaption: '真实世界从不会停下来把一段完整音频递到你手里，因此一个交互模型必须持续聆听，并逐时逐刻自行判断：此刻是否值得开口。这把音频建模<strong>从“回答完整片段”推进为“运行一个连续闭环”</strong>，也<strong>从“一堆单任务模型”收拢为“一个模型”</strong>，让识别、翻译与对话都成为同一条常驻音频流内的指令。<span class="lead">SoundFlow</span> 覆盖完整流水线：将短片段拼接为长交互以构造数据、带历史回看与理解感知静默的 <strong>chunk 级决策训练</strong>，以及把首帧延迟降低 <em>4.5&times;</em> 的<strong>异步 FIFO 推理</strong>。',
@@ -673,9 +671,7 @@
 
         resH2: '实验结果',
         resIntro: 'Audio-Interaction 保持了基本能力，同时在以语音为主的输入上明显变强；并且在我们对比的所有模型中拥有最强的主动介入能力。',
-        resTab1: '基础能力', resTab2: '语音输入', resTab3: '主动介入',
         rcTag1: '基础能力', rcTitle1: '基本能力得以保持', rcBody1: '离线识别与翻译与强基线持平，转向常驻并不会损失原有能力。',
-        rcTag2: '语音输入', rcTitle2: '明显变强', rcBody2: '在以语音为主的任务上明显更强，能随语音实时到来而跟踪并回应。',
         rcTag3: '主动介入', rcTitle3: '最强的主动介入', rcBody3: '在我们测试的所有模型中拥有最强的主动介入能力：它不仅知道说什么，更知道何时该说。',
 
         expH: '体验 Audio-Interaction',
