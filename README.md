@@ -17,19 +17,19 @@ AudioInteraction is a unified Audio Interaction Model that:
 
 
 <p align="center">
-  <a href="https://arxiv.org/abs/2605.XXXXX">Technical Report 📖</a> /
+  <a href="https://arxiv.org/pdf/2606.05121">Technical Report 📖</a> /
   <a href="https://huggingface.co/datasets/AudioInteraction/SoundFlow-260K">StreamAudio-2M 🤗</a> /
-  <a href="https://huggingface.co/AudioInteraction/AudioInteraction">AudioInteraction Model 🤗</a> /
-  <a href="https://github.com/AudioInteraction/Streaming-Audio-Bench">Streaming-Audio-Bench 🏆</a>
+  <a href="https://huggingface.co/zhifeixie/AudioInteraction">AudioInteraction Model 🤗</a> /
+  <a href="https://github.com/masaz14/Proactive-Sound-Effect-Benchmark">Streaming-Audio-Bench 🏆</a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/AudioInteraction/AudioInteraction/raw/main/assets/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-Join%20Group-07C160?logo=wechat&logoColor=white" alt="WeChat"></a>&nbsp;<a href="https://AudioInteraction.github.io/"><img src="https://img.shields.io/badge/Project-Page-blue" alt="Project Page"></a>&nbsp;<a href="https://x.com/"><img src="https://img.shields.io/badge/X-@audiointeraction-black?logo=x&logoColor=white" alt="X"></a>
+  <a href="https://github.com/AudioInteraction/AudioInteraction/raw/main/assets/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-Join%20Group-07C160?logo=wechat&logoColor=white" alt="WeChat"></a>&nbsp;<a href="https://xzf-thu.github.io/Audio-Interaction"><img src="https://img.shields.io/badge/Project-Page-blue" alt="Project Page"></a>&nbsp;<a href="https://x.com/XieZhifei14110"><img src="https://img.shields.io/badge/X-@audiointeraction-black?logo=x&logoColor=white" alt="X"></a>
 </p>
 
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=r1S4xiUBg9s">
+  <a href="https://www.youtube.com/watch?v=4YuBkMm1cmU">
     <img src="https://img.youtube.com/vi/r1S4xiUBg9s/maxresdefault.jpg" alt="Watch AudioInteraction running live" width="95%">
   </a>
 </p>
@@ -220,9 +220,9 @@ Edit the path constants at the top of each script first:
 
 | File | Constants to fill in |
 |---|---|
-| `src/mini_omni3/dataset/get_feat.py` | `QWEN_OMNI_CKPT`, `AUDIO_TOWER_CKPT` |
-| `src/mini_omni3/dataset/get_dataset_online.py` | `QWEN_OMNI_CKPT` |
-| `src/mini_omni3/dataset/get_dataset_offline.py` | `QWEN_OMNI_CKPT`, `AUDIO_TOWER_CKPT` |
+| `src/audiointeraction/dataset/get_feat.py` | `QWEN_OMNI_CKPT`, `AUDIO_TOWER_CKPT` |
+| `src/audiointeraction/dataset/get_dataset_online.py` | `QWEN_OMNI_CKPT` |
+| `src/audiointeraction/dataset/get_dataset_offline.py` | `QWEN_OMNI_CKPT`, `AUDIO_TOWER_CKPT` |
 
 #### Input JSONL format
 
@@ -269,21 +269,21 @@ or the online-style multi-turn shape, in which case only the **first** turn is u
 
 ```bash
 # Online: <input.jsonl> <output.jsonl> <error.log> <feature_dir>
-CUDA_VISIBLE_DEVICES=0 python src/mini_omni3/dataset/get_dataset_online.py \
+python src/audiointeraction/dataset/get_dataset_online.py \
     <input.jsonl> <output.jsonl> <error.log> <feature_dir>
 # Example:
-# CUDA_VISIBLE_DEVICES=0 python src/mini_omni3/dataset/get_dataset_online.py \
+# python src/audiointeraction/dataset/get_dataset_online.py \
 #     data/online_raw.jsonl data/online.jsonl logs/online.err features/online
 
 # Offline: <input.jsonl> <output.jsonl> <error.log> <feature_dir>
-CUDA_VISIBLE_DEVICES=0 python src/mini_omni3/dataset/get_dataset_offline.py \
+python src/audiointeraction/dataset/get_dataset_offline.py \
     <input.jsonl> <output.jsonl> <error.log> <feature_dir>
 # Example:
-# CUDA_VISIBLE_DEVICES=0 python src/mini_omni3/dataset/get_dataset_offline.py \
+python src/audiointeraction/dataset/get_dataset_offline.py \
 #     data/offline_raw.jsonl data/offline.jsonl logs/offline.err features/offline
 ```
 
-Both scripts are resumable: re-running picks up where the previous run stopped, skipping any `idx` that was already written. For a parallel multi-GPU template, see `src/mini_omni3/dataset/process_get_feature.sh`.
+Both scripts are resumable: re-running picks up where the previous run stopped, skipping any `idx` that was already written. For a parallel multi-GPU template, see `src/audiointeraction/dataset/process_get_feature.sh`.
 
 ### 2. Train
 
@@ -292,15 +292,15 @@ Both scripts are resumable: re-running picks up where the previous run stopped, 
 export DATA_ROOT=/path/to/your/jsonl/data
 export CHECKPOINT_ROOT=/path/to/your/checkpoints
 # Example:
-# export DATA_ROOT=/data/mini_omni3/jsonl
-# export CHECKPOINT_ROOT=/data/mini_omni3/ckpts
+# export DATA_ROOT=/data/audiointeraction/jsonl
+# export CHECKPOINT_ROOT=/data/audiointeraction/ckpts
 
-# 2. Edit hyperparameters / data sources in src/mini_omni3/finetune/config.yaml
+# 2. Edit hyperparameters / data sources in src/audiointeraction/finetune/config.yaml
 
 # 3. Launch
-python src/mini_omni3/finetune/full.py --config src/mini_omni3/finetune/config.yaml
+python src/audiointeraction/finetune/full.py --config src/audiointeraction/finetune/config.yaml
 # Example:
-# python src/mini_omni3/finetune/full.py --config src/mini_omni3/finetune/config.yaml
+# python src/audiointeraction/finetune/full.py --config src/audiointeraction/finetune/config.yaml
 ```
 
 ## <a id="datasets"></a> 🎊 StreamAudio-2M: a large-scale stream audio instruction following corpus
@@ -410,21 +410,21 @@ This project will be released under the **Apache-2.0 License**. You can do every
 **Citation**: You can cite AudioInteraction using the following BibTeX entry. Thank you for your kindness 🙂
 
 ```bibtex
-@misc{audiointeraction,
-      title={AudioInteraction: An Always-On Streaming Audio Language Model for the Real World},
-      author={AudioInteraction Team},
+@misc{xie2026audiointeractionmodel,
+      title={Audio Interaction Model}, 
+      author={Zhifei Xie and Zihang Liu and Ze An and Xiaobin Hu and Yue Liao and Ziyang Ma and Dongchao Yang and Mingbao Lin and Deheng Ye and Shuicheng Yan and Chunyan Miao},
       year={2026},
-      eprint={2605.XXXXX},
+      eprint={2606.05121},
       archivePrefix={arXiv},
       primaryClass={cs.SD},
-      url={https://arxiv.org/abs/2605.XXXXX},
+      url={https://arxiv.org/abs/2606.05121}, 
 }
 ```
 
 <a href="https://www.star-history.com/?repos=xzf-thu%2FAudioInteraction&type=date&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=xzf-thu/AudioInteraction&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=xzf-thu/AudioInteraction&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=xzf-thu/AudioInteraction&type=date&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=xzf-thu/Audio-Interaction&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=xzf-thu/Audio-Interaction&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=xzf-thu/Audio-Interaction&type=date&legend=top-left" />
  </picture>
 </a>
