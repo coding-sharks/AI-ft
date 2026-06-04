@@ -83,28 +83,36 @@ export PYTHONPATH=./
 python download.py
 ```
 
-**WebUI real-time demo**
+## Inference and WebUI
+
+Run inference first, then start the WebUI demo.
+
 ```bash
-# download model weights from huggingface
+# Add project root to PYTHONPATH
 export PYTHONPATH=./
-python web/server.py
 
-# then goto localhost:5001
-```
-
-**Inference**
-```bash
-# infer with default audio. make sure add ./ to the project base dir.
-# infer_online stimulate continous audio input.
-export PYTHONPATH=./
-python infer_online.py
-
-# Use your own audio for offline testing:
+# 1. Offline inference
 python infer_offline.py
 
-# Or try the three bundled sample sequences (set input_path in infer_offline.py to one of them):
-#   sample/01_count_bark/sequence.json, sample/02_translate/sequence.json, sample/03_cough_music/sequence.json
+# To test bundled samples, set input_path in infer_offline.py to one of:
+# sample/01_count_bark/sequence.json
+# sample/02_translate/sequence.json
+# sample/03_cough_music/sequence.json
+
+# 2. Real-time inference
+python infer_online.py
+````
+
+### WebUI real-time demo
+
+```bash
+# Download model weights from Hugging Face first
+python web/server.py
+
+# Open in browser:
+# http://localhost:5001
 ```
+
 
 
 ## <a id="demos"></a>🎬 Demos
