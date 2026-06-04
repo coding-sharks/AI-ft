@@ -18,7 +18,7 @@ AudioInteraction is a unified Audio Interaction Model that:
 
 <p align="center">
   <a href="https://arxiv.org/pdf/2606.05121">Technical Report 📖</a> /
-  <a href="https://huggingface.co/datasets/AudioInteraction/SoundFlow-260K">StreamAudio-2M 🤗</a> /
+  <a href="https://huggingface.co/datasets/zhifeixie/StreamAudio-2M">StreamAudio-2M 🤗</a> /
   <a href="https://huggingface.co/zhifeixie/AudioInteraction">AudioInteraction Model 🤗</a> /
   <a href="https://github.com/masaz14/Proactive-Sound-Effect-Benchmark">Streaming-Audio-Bench 🏆</a>
 </p>
@@ -30,7 +30,7 @@ AudioInteraction is a unified Audio Interaction Model that:
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=4YuBkMm1cmU">
-    <img src="https://img.youtube.com/vi/r1S4xiUBg9s/maxresdefault.jpg" alt="Watch AudioInteraction running live" width="95%">
+    <img src="https://img.youtube.com/vi/4YuBkMm1cmU/maxresdefault.jpg" alt="Watch AudioInteraction running live" width="95%">
   </a>
 </p>
 <p align="center"><em>▶ Click to watch AudioInteraction listen, decide, and speak — live (YouTube)</em></p>
