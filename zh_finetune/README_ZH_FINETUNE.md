@@ -120,6 +120,25 @@ LM 直接从 `.pt` 加载(上游 infer 只吃 safetensors 分片)。要打包给
 - ⚠️ 编译提速要点(已写进 run_all.sh):`$ENV_PREFIX/bin` 必须在 PATH 里,否则 torch 找不到
   ninja 会**静默退化成串行编译**(128 核机器上 1 小时 vs 并行 7 分钟)。
 
+## 单卡训练(H20 / 只有一张卡时必读)
+
+上游 `train.py` **只在多卡(FSDP)时启用激活重算**,单卡没有任何省显存机制 →
+3B 全参 + seq4096 单卡需要 **100GB+ 显存,必 OOM**(96G 的 H20 也不够)。
+
+解法已内置:`train_zh.py` 在 `--devices 1` 时**自动**给 `Block.forward` 打
+`torch.utils.checkpoint` 激活重算补丁(日志见 `[ckpt] ✅ 已启用`;
+`ZH_GRAD_CKPT=0/1` 可强制关/开;多卡时自动让位给 FSDP 自带重算)。
+
+**实测(1×A100-80G, full 几何 seq4096/micro2/重算开):Peak Memory = 72.95 GB** —
+96G H20 余量 ~23G,`config_zh_full.yaml` 无需改动。代价:步时约 +30%。
+
+单卡 full 命令:
+```bash
+bash zh_finetune/run_all.sh --full --devices 1 --data /path/9k.jsonl
+```
+单卡 H20 上 9k×3epoch 估 **~10-15 小时**,建议 tmux/nohup 挂后台。
+另: run_all 已默认 `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` 缓解碎片。
+
 ## 冒烟测试结果(2026-07-07, 1×A100-80G, 已跑通 ✅)
 
 `bash zh_finetune/run_all.sh --smoke` 端到端一次通过(阶段 1-7 全绿):

@@ -165,6 +165,8 @@ banner "7/7 训练 ($MODE, ${DEVICES} 卡)"
 [[ "$SKIP_TRAIN" == 1 ]] && { echo "--skip-train 已指定, 到此为止"; exit 0; }
 export AI_CKPT="$CKPT" AI_RUNTIME="$RT" AI_DATA="$(dirname "$TRAIN_JSONL")" AI_DEVICES="$DEVICES"
 export ZH_USE_FLASH="$USE_FLASH"
+# 缓解显存碎片; 单卡时 train_zh.py 会自动附加激活重算补丁(见 ZH_GRAD_CKPT)
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 cd "$REPO"
 LOG="$RT/logs/train_${MODE}_$(date +%Y%m%d_%H%M%S).log"
 echo "日志: $LOG"
