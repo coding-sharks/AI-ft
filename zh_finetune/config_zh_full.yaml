@@ -37,7 +37,9 @@ eval:
 
 logger_name: tensorboard
 seed: 1337
-resume: false                  # 断点续训改 "auto"
+# "auto": out_dir 里有 checkpoint 就自动续训(单卡 10h+ 长跑必备), 没有则从 init 开始。
+# 注意: 想彻底重训需先清掉 runtime/train_output/zh-full/ 或改 project.version。
+resume: "auto"
 
 data_sources:
   moss_zh:
