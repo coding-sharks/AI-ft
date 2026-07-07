@@ -1,0 +1,23 @@
+# zh_finetune 训练环境依赖(相比上游 requirements.txt 的差异):
+#   - 去掉 UI/演示类: PyQt6, sounddevice, flask, flask_socketio, pydub(训练用不到)
+#   - 去掉 litgpt==0.5.8: 全仓库源码 0 处 import(模型是 vendored 单文件), 装了只会带来依赖钉死
+#   - 不装 flash-attn: model.py 里是惰性 import, 且 Qwen2.5-3B 为 GQA(n_query_groups=2≠n_head),
+#     use_flash 分支永远为 False, 不会触发该 import
+#   - ffmpeg 由 conda 装(whisper.load_audio 需要该二进制)
+torch
+torchaudio
+transformers==4.57.6
+tokenizers
+safetensors
+lightning>=2.4
+torchmetrics
+tensorboard
+huggingface_hub
+hf_transfer
+openai-whisper
+librosa
+soundfile
+numpy
+pyyaml
+tqdm
+sentencepiece

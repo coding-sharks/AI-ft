@@ -1,0 +1,48 @@
+# 正式训练配置 —— 9k 条中文多轮语音对话, 8×GPU 全参微调。
+# 参考: 作者随 ckpt 发布的 hyperparameters.yaml(8 卡/global 64/micro 2/epochs 2/seq 4096),
+# 差异及理由:
+#   * max_lr 2e-5(作者最终 stage 从 2e-4 余弦到 min_lr 6e-5; 我们是小数据续训,
+#     用大 lr 容易把 3B 底座训崩; 2e-5 是稳妥起点, 观察 val loss 可上调到 5e-5)
+#   * warmup 30 / epochs 3: 9k 样本 × 3 epoch ÷ 64 ≈ 420 步, warmup 占 ~7%
+#   * eval/save 间隔按 ~420 步的量级调小
+# 环境变量同 smoke(由 run_all.sh 导出), AI_DEVICES 默认 8。
+
+project:
+  version: zh-full
+
+paths:
+  config_dir: ${AI_CKPT}
+  out_dir: ${AI_RUNTIME}/train_output
+  init_checkpoint: ${AI_RUNTIME}/init.pt
+
+training:
+  devices: ${AI_DEVICES}
+  global_batch_size: 64
+  micro_batch_size: 2
+  max_lr: 2e-5
+  lr_warmup_steps: 30
+  epochs: 3
+  max_seq_length: 4096
+  save_interval: 100
+  log_interval: 5
+  optimizer: AdamW
+
+eval:
+  eval_data_percentage: 0.01   # 9k → ~90 条做验证
+  eval_batch_size: 1
+  eval_interval: 50
+  max_iters: 100
+  max_new_tokens: 512
+  save_best_after_step: 150    # 之后保留 top-3 最低 val("train"桶) checkpoint
+
+logger_name: tensorboard
+seed: 1337
+resume: false                  # 断点续训改 "auto"
+
+data_sources:
+  moss_zh:
+    folders:
+      - ${AI_DATA}
+    type_name: moss_zh
+    enabled: true
+    use_turn_map: false

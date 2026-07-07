@@ -1,0 +1,46 @@
+# 冒烟测试配置 —— 单卡、极小步数, 只为验证"数据→训练"全链路能跑、loss 会降。
+# 由 run_all.sh 导出这些环境变量后使用(train.py 的 load_config 会做 ${VAR} 展开):
+#   AI_CKPT     = HF snapshot 根(含 model_config.yaml / tokenizer.json)
+#   AI_RUNTIME  = zh_finetune/runtime
+#   AI_DATA     = 最终训练 jsonl 所在目录
+#   AI_DEVICES  = GPU 数(冒烟默认 1)
+
+project:
+  version: zh-smoke
+
+paths:
+  config_dir: ${AI_CKPT}
+  out_dir: ${AI_RUNTIME}/train_output
+  init_checkpoint: ${AI_RUNTIME}/init.pt
+
+training:
+  devices: ${AI_DEVICES}
+  global_batch_size: 8
+  micro_batch_size: 1          # 单卡 80G 全参 3B: micro=1 + seq2048 内存安全
+  max_lr: 2e-5
+  lr_warmup_steps: 4
+  epochs: 2
+  max_steps: 12                # 跑 12 个 optimizer step 即收工
+  max_seq_length: 2048         # 冒烟样本 ~1.1k tokens; padding 到 2048 省显存
+  save_interval: 10
+  log_interval: 1
+  optimizer: AdamW
+
+eval:
+  eval_data_percentage: 0.1    # 64 副本 → ~52 train / ~12 eval
+  eval_batch_size: 1
+  eval_interval: 6
+  max_iters: 8
+  max_new_tokens: 64
+
+logger_name: tensorboard
+seed: 1337
+resume: false
+
+data_sources:
+  moss_zh:
+    folders:
+      - ${AI_DATA}
+    type_name: moss_zh
+    enabled: true
+    use_turn_map: false
