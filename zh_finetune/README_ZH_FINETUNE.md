@@ -92,7 +92,8 @@ LM 直接从 `.pt` 加载(上游 infer 只吃 safetensors 分片)。要打包给
 6. 超过 `max_seq_length` 的样本会让 `fill_in_audio_feature` 写入越界**直接崩训练**(不是安静截断)→ 构造末尾有超长过滤;
 7. 样本数太少时 dataloader 的 `int(n×ratio)` 会把训练集切空 → smoke 模式先把 1 条复制 64 份;
 8. 情感标签是白名单静默回退:不在 6 词表里的值(如 `neutral`/`excited`)会**无警告变成 normal** → 转换脚本做了显式校验;
-9. **`cons_online_data.py` 发布版 import 就是坏的**:它 `from generate.base import resolve_checkpoint_paths`,但该函数实际在仓库根 `utils.py`(内部树没同步)→ 本目录在运行时把符号注入 `base` 模块后再 import 上游(见 `cons_online_data_zh.py::_lazy_imports`)。
+9. **`cons_online_data.py` 发布版 import 就是坏的**:它 `from generate.base import resolve_checkpoint_paths`,但该函数实际在仓库根 `utils.py`(内部树没同步)→ 本目录在运行时把符号注入 `base` 模块后再 import 上游(见 `cons_online_data_zh.py::_lazy_imports`);
+10. **`whisper.load_audio` 每段音频 fork 一个 ffmpeg**——conda 环境在网络盘(CephFS)时每次 exec 要跨网加载 libav* 动态库,实测 ~1.4s/次(5.3 万段 ≈ 25 小时),并行时进程集体卡 D 状态。→ 本目录运行时把 `whisper.load_audio` 换成 **soundfile 进程内直读**(`--no-sf-audio` 可回退),实测快 3 个数量级,且 **64/64 样本 token 序列与 ffmpeg 版逐位一致**(语音路径上游本就走 librosa;ffmpeg 仅用于 16k 噪声/拼接 wav,16k→16k 读取两种实现逐位相同)。step2 另有 `--workers N` 多进程并行(每记录独立播种,结果与并行度无关)。**环境必须常驻网络盘的场景(临时 GPU 容器)这是正解**:库只在进程启动加载一次,不再为每段音频付网络代价。
 
 ## flash-attn 加速(可选, 默认开)
 

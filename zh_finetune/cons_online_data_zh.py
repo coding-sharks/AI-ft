@@ -39,12 +39,39 @@ from zh_finetune.zh_config import (  # noqa: E402
 )
 
 
-def _lazy_imports():
+def _sf_load_audio(path, sr=16000):
+    """soundfile 直读版 load_audio, 语义对齐 whisper.load_audio(解码→单声道→重采样→float32)。
+
+    为什么替换: whisper.load_audio 每次 fork 一个 ffmpeg 子进程; 若 conda 环境在网络盘
+    (CephFS 等), 每次 exec 要跨网加载 libav* 动态库, 实测 ~1.4s/次、5 万段音频 = 25 小时,
+    且高并发时进程全卡 D 状态。soundfile 进程内直读实测快 3 个数量级。
+    等价性: 本 pipeline 语音路径本来就走 librosa/soundfile(load_audio.py:41), ffmpeg 只用于
+    16kHz 噪声段与 step3 重读 16kHz 拼接 wav —— 16k→16k 无重采样, int16→float 同为 ÷32768,
+    与 ffmpeg 逐位一致; 仅当输入非 16kHz 时用 librosa(soxr)重采样, 与 ffmpeg 差异 ~1e-3 量级。
+    """
+    import librosa as _lr
+    import numpy as _np
+    import soundfile as _sf
+    data, native_sr = _sf.read(path, dtype="float32", always_2d=False)
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    if native_sr != sr:
+        data = _lr.resample(data, orig_sr=native_sr, target_sr=sr)
+    return _np.ascontiguousarray(data, dtype=_np.float32)
+
+
+def _lazy_imports(use_sf_audio=True):
     """重依赖延迟加载(torch/transformers/whisper), 让 --help 秒开。"""
     global up, whisper, sf, librosa, resolve_checkpoint_paths, SAMPLES_PER_FRAME
     import librosa            # noqa: F401
     import soundfile as sf    # noqa: F401
     import whisper            # noqa: F401
+
+    # --- 提速补丁(不改上游文件): 进程内把 whisper.load_audio 换成 soundfile 直读,
+    # 消除每段音频一次的 ffmpeg fork(上游 step3 与本文件的噪声加载都会自动走新实现)。
+    if use_sf_audio:
+        whisper.load_audio = _sf_load_audio
+        print("[audio] ffmpeg → soundfile 直读补丁: ✅(--no-sf-audio 可回退)")
 
     # --- 上游 bug 修补(不改上游文件): cons_online_data.py 从 generate.base 导入
     # resolve_checkpoint_paths, 但该函数实际定义在仓库根的 utils.py(发布版遗漏)。
@@ -93,73 +120,124 @@ def _fade_edges(seg, fade_samples):
     return seg
 
 
+# step2 多进程 worker 配置(fork 继承; Linux 默认 fork 启动方式)
+_W = {}
+
+
+def _step2_one_record(line):
+    """处理一条 step1 记录 → (输出行 or None, 延迟列表, 错误信息 or None)。
+
+    可复现性: 每条记录独立播种(seed×大素数+idx), 与 worker 数/调度顺序无关。
+    """
+    import random
+    rec = json.loads(line)
+    try:
+        random.seed(_W["seed"] * 1_000_003 + int(rec["idx"]))
+        chunk_size, align, fade_n = _W["chunk_size"], _W["align"], _W["fade_n"]
+        delays = []
+        segments = []
+        cum = 0
+        for k, t in enumerate(rec["turns"]):
+            trimmed = _trim_speech(
+                t["audio_path"],
+                os.path.join(_W["trimmed_dir"], f"{rec['idx']}_{k}.wav"),
+                _W["trim_top_db"],
+            )
+            seg, n_frames = up._load_audio_aligned(trimmed)
+
+            lead = t["leading_silence_frames"]
+            if align:
+                # 补齐前导噪声, 使本轮结束帧 % chunk == ALIGN_TARGET_MOD
+                lead += (ALIGN_TARGET_MOD - (cum + lead + n_frames) % chunk_size) % chunk_size
+            noise = _load_noise_wrap(
+                t["leading_noise_path"], t["leading_noise_start_s"],
+                lead * SAMPLES_PER_FRAME,
+            )
+            _fade_edges(noise, fade_n)
+            segments += [noise, seg]
+
+            t["leading_silence_frames"] = lead
+            t["audio_frames"] = n_frames
+            cum += lead + n_frames
+            # 该轮回复决策点相对语音结束的滞后
+            delays.append((chunk_size - cum % chunk_size) % chunk_size * 40 or chunk_size * 40)
+
+        # 尾部静音: 与上游同一套取整逻辑, 使总帧数落在 chunk 边界
+        tail = rec["tail_silence_frames"] - (cum + rec["tail_silence_frames"]) % chunk_size
+        if tail < 0:
+            tail = (chunk_size - (cum % chunk_size)) % chunk_size
+        tail_noise = _load_noise_wrap(
+            rec["tail_noise_path"], rec["tail_noise_start_s"],
+            tail * SAMPLES_PER_FRAME,
+        )
+        _fade_edges(tail_noise, fade_n)
+        segments.append(tail_noise)
+        rec["tail_silence_frames_actual"] = tail
+
+        wav_path = os.path.join(_W["wavs_dir"], f"{rec['idx']}.wav")
+        up._write_wav(wav_path, np.concatenate(segments))
+        rec["concat_wav_path"] = wav_path
+        return json.dumps(rec, ensure_ascii=False) + "\n", delays, None
+    except Exception as e:
+        return None, [], f"[step2zh idx {rec.get('idx')}] {type(e).__name__}: {e}"
+
+
+def _step2_worker_init():
+    """worker 初始化: 限制 BLAS 线程, 防 N 进程 × M 线程超订。"""
+    for v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+              "NUMEXPR_NUM_THREADS"):
+        os.environ[v] = "1"
+
+
 def step2_concat_audio_zh(input_jsonl, output_jsonl, wavs_dir, trimmed_dir, *,
-                          chunk_size, align, trim_top_db, seed=1337):
+                          chunk_size, align, trim_top_db, seed=1337, workers=1):
     """上游 step2 的替代实现: [噪声→语音]×N→尾噪声, 带 trim/对齐/fade。
 
     帧数计算完全复用上游 `_load_audio_aligned`(对修剪后的 wav 调用),
     与 step3 特征提取的卷积长度公式保持一致。
+    workers>1 时多进程并行(soundfile 直读无子进程, 可安全并行;
+    每条记录独立播种, 结果与并行度无关)。
     """
-    import random
-    random.seed(seed)  # 上游 _load_audio_aligned 超长裁剪时用 random, 保证可复现
     os.makedirs(wavs_dir, exist_ok=True)
     os.makedirs(trimmed_dir, exist_ok=True)
     os.makedirs(os.path.dirname(os.path.abspath(output_jsonl)) or ".", exist_ok=True)
-    fade_n = int(CROSSFADE_MS / 1000 * 16000)
 
-    delays_ms = []
+    _W.update(dict(
+        seed=seed, chunk_size=chunk_size, align=align, trim_top_db=trim_top_db,
+        fade_n=int(CROSSFADE_MS / 1000 * 16000),
+        wavs_dir=wavs_dir, trimmed_dir=trimmed_dir,
+    ))
+
     from tqdm import tqdm
-    with open(input_jsonl, "r", encoding="utf-8") as fin, \
-         open(output_jsonl, "w", encoding="utf-8") as fout:
-        for line in tqdm(fin.readlines(), desc="step2(zh)"):
-            rec = json.loads(line)
-            try:
-                segments = []
-                cum = 0
-                for k, t in enumerate(rec["turns"]):
-                    trimmed = _trim_speech(
-                        t["audio_path"],
-                        os.path.join(trimmed_dir, f"{rec['idx']}_{k}.wav"),
-                        trim_top_db,
-                    )
-                    seg, n_frames = up._load_audio_aligned(trimmed)
+    with open(input_jsonl, "r", encoding="utf-8") as f:
+        lines = f.readlines()
 
-                    lead = t["leading_silence_frames"]
-                    if align:
-                        # 补齐前导噪声, 使本轮结束帧 % chunk == ALIGN_TARGET_MOD
-                        lead += (ALIGN_TARGET_MOD - (cum + lead + n_frames) % chunk_size) % chunk_size
-                    noise = _load_noise_wrap(
-                        t["leading_noise_path"], t["leading_noise_start_s"],
-                        lead * SAMPLES_PER_FRAME,
-                    )
-                    _fade_edges(noise, fade_n)
-                    segments += [noise, seg]
+    delays_ms, n_err = [], 0
+    with open(output_jsonl, "w", encoding="utf-8") as fout:
+        if workers <= 1:
+            it = (_step2_one_record(l) for l in lines)
+            for out_line, delays, err in tqdm(it, total=len(lines), desc="step2(zh)"):
+                if err:
+                    n_err += 1
+                    print(err)
+                else:
+                    fout.write(out_line)
+                    delays_ms.extend(delays)
+        else:
+            import multiprocessing as mp
+            with mp.Pool(processes=workers, initializer=_step2_worker_init) as pool:
+                for out_line, delays, err in tqdm(
+                        pool.imap(_step2_one_record, lines, chunksize=8),
+                        total=len(lines), desc=f"step2(zh)×{workers}"):
+                    if err:
+                        n_err += 1
+                        print(err)
+                    else:
+                        fout.write(out_line)
+                        delays_ms.extend(delays)
 
-                    t["leading_silence_frames"] = lead
-                    t["audio_frames"] = n_frames
-                    cum += lead + n_frames
-                    # 该轮回复决策点相对语音结束的滞后
-                    delays_ms.append((chunk_size - cum % chunk_size) % chunk_size * 40 or chunk_size * 40)
-
-                # 尾部静音: 与上游同一套取整逻辑, 使总帧数落在 chunk 边界
-                tail = rec["tail_silence_frames"] - (cum + rec["tail_silence_frames"]) % chunk_size
-                if tail < 0:
-                    tail = (chunk_size - (cum % chunk_size)) % chunk_size
-                tail_noise = _load_noise_wrap(
-                    rec["tail_noise_path"], rec["tail_noise_start_s"],
-                    tail * SAMPLES_PER_FRAME,
-                )
-                _fade_edges(tail_noise, fade_n)
-                segments.append(tail_noise)
-                rec["tail_silence_frames_actual"] = tail
-
-                wav_path = os.path.join(wavs_dir, f"{rec['idx']}.wav")
-                up._write_wav(wav_path, np.concatenate(segments))
-                rec["concat_wav_path"] = wav_path
-                fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            except Exception as e:
-                print(f"[step2zh idx {rec.get('idx')}] {type(e).__name__}: {e}")
-
+    if n_err:
+        print(f"[step2zh] {n_err} 条失败(已跳过, 见上方日志)")
     if delays_ms:
         print(f"[延迟] 回复决策点滞后于语音结束: mean={np.mean(delays_ms):.0f}ms "
               f"max={np.max(delays_ms):.0f}ms (align={'on' if align else 'off'})")
@@ -222,9 +300,13 @@ def main():
     ap.add_argument("--seed", type=int, default=1337)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--skip-steps", default="", help="逗号分隔跳过的步骤, 如 1,2,3(断点续跑)")
+    ap.add_argument("--workers", type=int, default=16,
+                    help="step2 并行进程数(soundfile 直读后纯 CPU, 可放心并行; 1=串行)")
+    ap.add_argument("--no-sf-audio", action="store_true",
+                    help="回退 ffmpeg 版 whisper.load_audio(调试对照用)")
     args = ap.parse_args()
 
-    _lazy_imports()
+    _lazy_imports(use_sf_audio=not args.no_sf_audio)
     skip = {s.strip() for s in args.skip_steps.split(",") if s.strip()}
 
     wd = os.path.abspath(args.work_dir)
@@ -244,7 +326,7 @@ def main():
         step2_concat_audio_zh(
             s1, s2, wavs, trimmed,
             chunk_size=args.chunk_size, align=not args.no_align,
-            trim_top_db=args.trim_top_db, seed=args.seed,
+            trim_top_db=args.trim_top_db, seed=args.seed, workers=args.workers,
         )
     if "3" not in skip:
         up.step3_extract_features(

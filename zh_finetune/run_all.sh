@@ -17,7 +17,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RT="$REPO/zh_finetune/runtime"
 mkdir -p "$RT/logs"
 
-MODE="" DATA="$REPO/data.jsonl" DEVICES="" SKIP_TRAIN=0 USE_FLASH=1
+MODE="" DATA="$REPO/data.jsonl" DEVICES="" SKIP_TRAIN=0 USE_FLASH=1 WORKERS=32
 AUDIO_ROOT="/apdcephfs/private_giannishu/api_call/data_finetuning/moss-zh"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,6 +28,7 @@ while [[ $# -gt 0 ]]; do
     --audio-root) AUDIO_ROOT="$2"; shift 2;;
     --skip-train) SKIP_TRAIN=1; shift;;
     --no-flash) USE_FLASH=0; shift;;
+    --workers) WORKERS="$2"; shift 2;;
     *) echo "未知参数: $1"; exit 1;;
   esac
 done
@@ -157,7 +158,7 @@ else
   "$PY" "$REPO/zh_finetune/cons_online_data_zh.py" \
       --input "$ONLINE_IN" --checkpoint-dir "$CKPT" \
       --work-dir "$OUTD/work" --out "$TRAIN_JSONL" \
-      --noise-dir "$RT/noise" --max-seq "$MAXSEQ" --seed 1337
+      --noise-dir "$RT/noise" --max-seq "$MAXSEQ" --seed 1337 --workers "$WORKERS"
 fi
 
 # ---------------- 阶段 7: 训练 ----------------
