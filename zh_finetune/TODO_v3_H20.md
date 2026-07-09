@@ -59,7 +59,9 @@ for tag, db in [("loud3db", 3.0), ("quiet24db", 24.0)]:
 
 → 记录 (a)(b) 的逐帧 P 表,写入汇报。
 
-## Task 4 真实麦克风锚定集(需人类用户参与,半天;强烈建议——不做则泛化风险自负)
+## Task 4 真实麦克风锚定集(需人类用户参与,半天;**必做** —— Task 3 实验已判:
+## 信道/真人声轴主导(包装实验两版全沉默)、且底座对麦克风能开口 P=0.94/0.99 而微调后不能
+## = 灾难性分布收窄。锚定集是保住"真人声→开口"模式的直接手段,信道模拟只是辅助)
 
 - [ ] 用 zh_demo 实录 **100~300 条**真人口语问句(信道与部署天然一致)。
 - [ ] 音频按现有约定放置:`{AUDIO_ROOT}/mic-0001/mic-0001_turn1.wav` …
@@ -68,6 +70,8 @@ for tag, db in [("loud3db", 3.0), ("quiet24db", 24.0)]:
       `{"dialog":"mic-0001","turns":[{...user...},{...assistant(含emotion)...}]}`
       **同一条记录连写 3~5 行**(= 上采样 3-5 倍)。
 - [ ] 另留 **10~20 条实录不要加进 data.jsonl** —— 作为 held-out 验收集。
+- [ ] (可选放大器)锚定量 <200 条时,可混入开源真人语音库(AISHELL/WenetSpeech)的
+      语句当用户轮 + LLM 生成回复——音色/信道真实,弥补量的不足;放置与格式同上。
 
 ## Task 5 重建数据 + 重训(v3)
 
@@ -94,16 +98,26 @@ bash zh_finetune/run_all.sh --full --devices 1 \
 
 训练量:2 epoch ≈ 280 优化步,单卡 H20 约 **7-10 小时**;中断后重跑同命令自动续训。
 
-## Task 6 验收(⚠️ 协议已变 —— 用真实录音验收,不是训练 wav!)
+## Task 6 验收(⚠️ 协议已变 —— 用真实录音验收 + 按真实指标选 checkpoint!)
+
+**6.0 checkpoint 扫描(关键保险,Task 3(b) 的直接推论)**:分布收窄随训练步数渐进
+加深——底座(step 0)对麦克风 P=0.94/0.99,旧模型训到后期 <0.4%。因此**不要默认部署
+final**:对 `train_output/zh-full/` 下所有存档(step-100/step-200/…/best-*/final)
+用 held-out 实录逐个测"语音结束点 P(TEXT_BEGIN)",**选真实麦克风表现最好的那个部署**
+(用现有 diag 脚本对 ckpt 路径循环即可)。若最优点明显早于 final,说明还在收窄,
+下轮加大锚定集占比或减 epoch。
 
 1. **held-out 实录** → 逐帧 P(TEXT_BEGIN):语音结束点应 argmax=TEXT_BEGIN(P 至少几十%),
    静音段/说话中段保持 KEEP_SILENCE;
 2. 训练分布 wav(`data_full/work/wavs/0.wav`)回归检查:每轮各开口一次;
-3. zh_demo 端到端实测:`server_zh.py` 换新 `final/lit_model.pth`,
+3. zh_demo 端到端实测:`server_zh.py` 换 **6.0 选出的 checkpoint**,
    prompt 保持与训练一致的 `ZH_SYSTEM_PROMPT`(zh_config.py 单一来源)。
 
 ## 汇报清单(执行完发回)
 
-- [ ] Task 3 (a)(b) 的逐帧 P 表与判读结论
+- [x] Task 3 (a)(b) 的逐帧 P 表与判读结论
+      (2026-07-09 已完成:两版包装全沉默→信道/真人声轴主导;底座对麦克风 2/36 开口
+       P=0.94/0.99→坐实微调收窄。详见 zh_demo/DIAGNOSIS.md §0.5)
 - [ ] Task 5 四条守门日志 + step 50 首次 eval 的 `val_moss_zh`
+- [ ] Task 6.0 checkpoint 扫描表(各存档在 held-out 实录上的 P)+ 选定的部署 ckpt
 - [ ] Task 6 三项验收结果(重点:held-out 实录上的开口表现)
