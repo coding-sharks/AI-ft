@@ -50,8 +50,11 @@ bash zh_finetune/run_all.sh --full --data /path/to/data.jsonl \
 且 **TTS wav 尾部自带的静音会被当成语音的一部分**,进一步推迟标签。我们做三件事:
 
 1. **尾部静音修剪**(`librosa.effects.trim, top_db=40`):标签严格贴真实语音结尾;
-2. **块边界对齐**(`ALIGN_TARGET_MOD=8`):微调每轮前导噪声长度,使语音结束帧 `%10==8`
-   → 回复决策点固定在语音结束后 **(10-8)×40 = 80ms**(对应论文 half-chunk align δ=200ms 思路);
+2. **块边界对齐**(`ALIGN_TARGET_MODS=(4,5,6,7)`,每轮随机):使语音结束帧 `%10∈{4..7}`
+   → 回复决策点在语音结束后 **120~240ms(均值 180ms)**,对应论文 half-chunk align δ=200ms。
+   ⚠️ 勿改回恒定 80ms:2 帧证据+零方差会引发"训后不开口"坍缩(见坑 10.5);
+2.5 **空档噪声增益控制**(`NOISE_ATTEN_DB_RANGE=(18,30)`):空档噪声衰减到语音 RMS 之下
+   18~30dB(随机),并剔除前景人声类噪声——制造真实的"说完→变安静"边界(坑 10.5 的核心修复);
 3. **20ms 边缘淡入淡出**(论文 fade window ω=20ms):只 fade 噪声段,消除拼接爆音。
 
 step2 结束会打印 `[延迟] 回复决策点滞后于语音结束: mean=…ms max=…ms` 供核对。
@@ -93,7 +96,17 @@ LM 直接从 `.pt` 加载(上游 infer 只吃 safetensors 分片)。要打包给
 7. 样本数太少时 dataloader 的 `int(n×ratio)` 会把训练集切空 → smoke 模式先把 1 条复制 64 份;
 8. 情感标签是白名单静默回退:不在 6 词表里的值(如 `neutral`/`excited`)会**无警告变成 normal** → 转换脚本做了显式校验;
 9. **`cons_online_data.py` 发布版 import 就是坏的**:它 `from generate.base import resolve_checkpoint_paths`,但该函数实际在仓库根 `utils.py`(内部树没同步)→ 本目录在运行时把符号注入 `base` 模块后再 import 上游(见 `cons_online_data_zh.py::_lazy_imports`);
-10. **`whisper.load_audio` 每段音频 fork 一个 ffmpeg**——conda 环境在网络盘(CephFS)时每次 exec 要跨网加载 libav* 动态库,实测 ~1.4s/次(5.3 万段 ≈ 25 小时),并行时进程集体卡 D 状态。→ 本目录运行时把 `whisper.load_audio` 换成 **soundfile 进程内直读**(`--no-sf-audio` 可回退),实测快 3 个数量级,且 **64/64 样本 token 序列与 ffmpeg 版逐位一致**(语音路径上游本就走 librosa;ffmpeg 仅用于 16k 噪声/拼接 wav,16k→16k 读取两种实现逐位相同)。step2 另有 `--workers N` 多进程并行(每记录独立播种,结果与并行度无关)。**环境必须常驻网络盘的场景(临时 GPU 容器)这是正解**:库只在进程启动加载一次,不再为每段音频付网络代价。
+10.5 **🔴 最重要的坑:"训后不开口"坍缩(2026-07-09 实case)**——训练一个 epoch 后模型在所有决策点
+   P(TEXT_BEGIN)<1%,永远沉默。根因是两个数据构造问题叠加:①空档"静音"用 MS-SNSD **原生振幅**拼接,
+   实测仅比语音低 **3.2dB**、且 21% 是人声类(Babble/Cafe)——"语音结束→变安静"的声学边界不存在,
+   还大规模教出"人声→保持沉默";②回复决策点曾钉死在语音结束后 80ms(2 帧证据、零方差),正样本
+   与"话说一半"的负样本无法区分。在 12:1 的沉默:开口标签比下,模型坍缩到多数类;**训练 loss 完全正常**
+   (全预测沉默本来就是低 loss 解),loss 曲线抓不到。修复(已内置):空档噪声衰减到语音−18~30dB(随机)、
+   剔除前景人声类、对齐随机化 120~240ms;构造期自动打印 `[响度]` 守门(<15dB 告警)。
+   **复训必须从原始 init.pt 重来**(删除 train_output,勿 resume 坍缩 ckpt)。
+   训后行为验收:用 `infer_online_zh.py` 跑一条训练 wav,应每轮各开口一次。
+
+11. **`whisper.load_audio` 每段音频 fork 一个 ffmpeg**——conda 环境在网络盘(CephFS)时每次 exec 要跨网加载 libav* 动态库,实测 ~1.4s/次(5.3 万段 ≈ 25 小时),并行时进程集体卡 D 状态。→ 本目录运行时把 `whisper.load_audio` 换成 **soundfile 进程内直读**(`--no-sf-audio` 可回退),实测快 3 个数量级,且 **64/64 样本 token 序列与 ffmpeg 版逐位一致**(语音路径上游本就走 librosa;ffmpeg 仅用于 16k 噪声/拼接 wav,16k→16k 读取两种实现逐位相同)。step2 另有 `--workers N` 多进程并行(每记录独立播种,结果与并行度无关)。**环境必须常驻网络盘的场景(临时 GPU 容器)这是正解**:库只在进程启动加载一次,不再为每段音频付网络代价。
 
 ## flash-attn 加速(可选, 默认开)
 

@@ -35,7 +35,8 @@ sys.path.insert(0, str(_REPO))
 import numpy as np  # noqa: E402
 
 from zh_finetune.zh_config import (  # noqa: E402
-    ALIGN_TARGET_MOD, CROSSFADE_MS, TRIM_MIN_KEEP_S, TRIM_TOP_DB, ZH_SYSTEM_PROMPT,
+    ALIGN_TARGET_MODS, CROSSFADE_MS, GAP_NOISE_EXCLUDE_PATTERN,
+    NOISE_ATTEN_DB_RANGE, TRIM_MIN_KEEP_S, TRIM_TOP_DB, ZH_SYSTEM_PROMPT,
 )
 
 
@@ -124,38 +125,62 @@ def _fade_edges(seg, fade_samples):
 _W = {}
 
 
+def _rms_db(x):
+    return 20.0 * np.log10(float(np.sqrt(np.mean(np.square(x, dtype=np.float64)))) + 1e-12)
+
+
 def _step2_one_record(line):
     """处理一条 step1 记录 → (输出行 or None, 延迟列表, 错误信息 or None)。
 
     可复现性: 每条记录独立播种(seed×大素数+idx), 与 worker 数/调度顺序无关。
+    2026-07-09 修复"训后不开口"坍缩:
+      * 空档噪声增益控制 —— 衰减到「本对话语音 RMS − U(atten_db)」, 制造真实的
+        "说完→变安静"声学边界(原生振幅时噪声仅比语音低 ~3dB, 无边界可学);
+      * 对齐目标随机化 —— 结束帧 mod 从恒定 8(80ms 证据/零方差)改为每轮随机
+        {4..7}(120~240ms 证据), 保证正样本可学、有方差。
     """
     import random
     rec = json.loads(line)
     try:
         random.seed(_W["seed"] * 1_000_003 + int(rec["idx"]))
-        chunk_size, align, fade_n = _W["chunk_size"], _W["align"], _W["fade_n"]
+        chunk_size, fade_n = _W["chunk_size"], _W["fade_n"]
+        align_mods = _W["align_mods"]        # tuple 或 None(关闭对齐)
+        atten_range = _W["atten_db"]         # (lo,hi) 或 None(关闭增益控制)
         delays = []
-        segments = []
-        cum = 0
+
+        # ---- pass 1: 修剪并载入全部语音段, 求本对话语音 RMS 基准 ----
+        speeches = []
         for k, t in enumerate(rec["turns"]):
             trimmed = _trim_speech(
                 t["audio_path"],
                 os.path.join(_W["trimmed_dir"], f"{rec['idx']}_{k}.wav"),
                 _W["trim_top_db"],
             )
-            seg, n_frames = up._load_audio_aligned(trimmed)
+            speeches.append(up._load_audio_aligned(trimmed))
+        speech_db = _rms_db(np.concatenate([s for s, _ in speeches]))
 
+        def _gap_noise(path, start_s, n_samples):
+            noise = _load_noise_wrap(path, start_s, n_samples)
+            if atten_range is not None and len(noise):
+                target_db = speech_db - random.uniform(*atten_range)
+                gain = min(1.0, 10.0 ** ((target_db - _rms_db(noise)) / 20.0))  # 只衰减不放大
+                noise = noise * gain
+            return _fade_edges(noise, fade_n)
+
+        # ---- pass 2: 拼接 ----
+        segments = []
+        cum = 0
+        for k, t in enumerate(rec["turns"]):
+            seg, n_frames = speeches[k]
             lead = t["leading_silence_frames"]
-            if align:
-                # 补齐前导噪声, 使本轮结束帧 % chunk == ALIGN_TARGET_MOD
-                lead += (ALIGN_TARGET_MOD - (cum + lead + n_frames) % chunk_size) % chunk_size
-            noise = _load_noise_wrap(
-                t["leading_noise_path"], t["leading_noise_start_s"],
-                lead * SAMPLES_PER_FRAME,
-            )
-            _fade_edges(noise, fade_n)
-            segments += [noise, seg]
-
+            if align_mods:
+                m = random.choice(align_mods)
+                lead += (m - (cum + lead + n_frames) % chunk_size) % chunk_size
+            segments += [
+                _gap_noise(t["leading_noise_path"], t["leading_noise_start_s"],
+                           lead * SAMPLES_PER_FRAME),
+                seg,
+            ]
             t["leading_silence_frames"] = lead
             t["audio_frames"] = n_frames
             cum += lead + n_frames
@@ -166,12 +191,8 @@ def _step2_one_record(line):
         tail = rec["tail_silence_frames"] - (cum + rec["tail_silence_frames"]) % chunk_size
         if tail < 0:
             tail = (chunk_size - (cum % chunk_size)) % chunk_size
-        tail_noise = _load_noise_wrap(
-            rec["tail_noise_path"], rec["tail_noise_start_s"],
-            tail * SAMPLES_PER_FRAME,
-        )
-        _fade_edges(tail_noise, fade_n)
-        segments.append(tail_noise)
+        segments.append(_gap_noise(rec["tail_noise_path"], rec["tail_noise_start_s"],
+                                   tail * SAMPLES_PER_FRAME))
         rec["tail_silence_frames_actual"] = tail
 
         wav_path = os.path.join(_W["wavs_dir"], f"{rec['idx']}.wav")
@@ -190,8 +211,9 @@ def _step2_worker_init():
 
 
 def step2_concat_audio_zh(input_jsonl, output_jsonl, wavs_dir, trimmed_dir, *,
-                          chunk_size, align, trim_top_db, seed=1337, workers=1):
-    """上游 step2 的替代实现: [噪声→语音]×N→尾噪声, 带 trim/对齐/fade。
+                          chunk_size, align_mods, atten_db, trim_top_db,
+                          seed=1337, workers=1):
+    """上游 step2 的替代实现: [噪声→语音]×N→尾噪声, 带 trim/随机对齐/增益控制/fade。
 
     帧数计算完全复用上游 `_load_audio_aligned`(对修剪后的 wav 调用),
     与 step3 特征提取的卷积长度公式保持一致。
@@ -203,7 +225,8 @@ def step2_concat_audio_zh(input_jsonl, output_jsonl, wavs_dir, trimmed_dir, *,
     os.makedirs(os.path.dirname(os.path.abspath(output_jsonl)) or ".", exist_ok=True)
 
     _W.update(dict(
-        seed=seed, chunk_size=chunk_size, align=align, trim_top_db=trim_top_db,
+        seed=seed, chunk_size=chunk_size, align_mods=align_mods, atten_db=atten_db,
+        trim_top_db=trim_top_db,
         fade_n=int(CROSSFADE_MS / 1000 * 16000),
         wavs_dir=wavs_dir, trimmed_dir=trimmed_dir,
     ))
@@ -240,7 +263,66 @@ def step2_concat_audio_zh(input_jsonl, output_jsonl, wavs_dir, trimmed_dir, *,
         print(f"[step2zh] {n_err} 条失败(已跳过, 见上方日志)")
     if delays_ms:
         print(f"[延迟] 回复决策点滞后于语音结束: mean={np.mean(delays_ms):.0f}ms "
-              f"max={np.max(delays_ms):.0f}ms (align={'on' if align else 'off'})")
+              f"min={np.min(delays_ms):.0f}ms max={np.max(delays_ms):.0f}ms "
+              f"(align_mods={align_mods})")
+    _report_gap_contrast(output_jsonl)
+
+
+def _report_gap_contrast(step2_jsonl, n_check=3):
+    """构造质量守门: 抽样报告"语音 vs 空档噪声"的响度差。
+    差值应 ≥ ~15dB —— 否则模型听不到"说完变安静"的边界(坍缩为永远沉默的根因)。"""
+    try:
+        checked = []
+        with open(step2_jsonl, encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if i >= n_check:
+                    break
+                rec = json.loads(line)
+                wav, _ = sf.read(rec["concat_wav_path"], dtype="float32")
+                pos, sp_db, gp_db = 0, [], []
+                for t in rec["turns"]:
+                    nL = t["leading_silence_frames"] * SAMPLES_PER_FRAME
+                    nA = t["audio_frames"] * SAMPLES_PER_FRAME
+                    if nL:
+                        gp_db.append(_rms_db(wav[pos:pos + nL]))
+                    pos += nL
+                    sp_db.append(_rms_db(wav[pos:pos + nA]))
+                    pos += nA
+                checked.append(np.mean(sp_db) - np.mean(gp_db))
+        contrast = float(np.mean(checked))
+        flag = "✓" if contrast >= 15 else "⚠️ 过小, 模型可能学不到开口时机!"
+        print(f"[响度] 语音比空档噪声高 {contrast:.1f} dB (抽样 {len(checked)} 条) {flag}")
+    except Exception as e:
+        print(f"[响度] 抽样检查失败(不影响构造): {e}")
+
+
+def _build_gap_noise_dir(noise_dir, work_dir, exclude_pattern):
+    """为空档填充建一个剔除了前景人声类噪声(Babble/广播)的符号链接池。"""
+    if not exclude_pattern:
+        return noise_dir
+    import re
+    import shutil
+    pat = re.compile(exclude_pattern, re.I)
+    dst = os.path.join(work_dir, "noise_gap_pool")
+    if os.path.isdir(dst):
+        shutil.rmtree(dst)
+    os.makedirs(dst)
+    n_keep = n_skip = 0
+    for root, _, files in os.walk(noise_dir):
+        for fn in files:
+            if not fn.lower().endswith((".wav", ".flac", ".ogg", ".mp3")):
+                continue
+            if pat.search(fn):
+                n_skip += 1
+                continue
+            os.symlink(os.path.abspath(os.path.join(root, fn)),
+                       os.path.join(dst, f"{n_keep:05d}_{fn}"))
+            n_keep += 1
+    print(f"[noise] 空档噪声池: 保留 {n_keep} 个, 剔除人声类 {n_skip} 个 "
+          f"(pattern={exclude_pattern!r})")
+    if n_keep == 0:
+        sys.exit("[noise] 剔除后噪声池为空, 请放宽 --gap-noise-exclude")
+    return dst
 
 
 # ---------- 产物校验 ----------
@@ -293,6 +375,15 @@ def main():
     ap.add_argument("--noise-dir", required=True)
     ap.add_argument("--max-seq", type=int, default=4096)
     ap.add_argument("--no-align", action="store_true", help="关闭块边界对齐优化")
+    ap.add_argument("--align-mods", default=",".join(map(str, ALIGN_TARGET_MODS)),
+                    help="对齐目标 mod 集合(逗号分隔, 每轮随机选一)。mod=m → 决策点在语音"
+                         "结束后 (10-m)*40ms。默认 4,5,6,7 → 120~240ms")
+    ap.add_argument("--noise-atten-db", default=f"{NOISE_ATTEN_DB_RANGE[0]},{NOISE_ATTEN_DB_RANGE[1]}",
+                    help="空档噪声相对语音的衰减范围 dB(逗号分隔 lo,hi, 每段随机)。默认 18,30")
+    ap.add_argument("--no-noise-atten", action="store_true",
+                    help="关闭空档噪声增益控制(危险: 会复现'训后不开口'坍缩)")
+    ap.add_argument("--gap-noise-exclude", default=GAP_NOISE_EXCLUDE_PATTERN,
+                    help="空档噪声池按文件名剔除的正则(前景人声类)。空串=不剔除")
     ap.add_argument("--trim-top-db", type=float, default=TRIM_TOP_DB)
     ap.add_argument("--min-noise-len", type=int, default=20)
     ap.add_argument("--max-noise-len", type=int, default=60)
@@ -316,16 +407,22 @@ def main():
 
     tokenizer_dir, _, qwen_omni_ckpt, audio_tower_ckpt = resolve_checkpoint_paths(args.checkpoint_dir)
 
+    align_mods = None if args.no_align else tuple(
+        int(x) for x in args.align_mods.split(",") if x.strip())
+    atten_db = None if args.no_noise_atten else tuple(
+        float(x) for x in args.noise_atten_db.split(","))
+    gap_noise_dir = _build_gap_noise_dir(args.noise_dir, wd, args.gap_noise_exclude)
+
     if "1" not in skip:
         up.step1_sample_silence(
-            args.input, s1, noise_dir=args.noise_dir,
+            args.input, s1, noise_dir=gap_noise_dir,
             min_noise_len=args.min_noise_len, max_noise_len=args.max_noise_len,
             chunk_size=args.chunk_size, seed=args.seed,
         )
     if "2" not in skip:
         step2_concat_audio_zh(
             s1, s2, wavs, trimmed,
-            chunk_size=args.chunk_size, align=not args.no_align,
+            chunk_size=args.chunk_size, align_mods=align_mods, atten_db=atten_db,
             trim_top_db=args.trim_top_db, seed=args.seed, workers=args.workers,
         )
     if "3" not in skip:
