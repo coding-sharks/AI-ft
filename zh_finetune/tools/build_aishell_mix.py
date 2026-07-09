@@ -49,6 +49,38 @@ FALLBACK_REPLIES = [
 ]
 
 
+# 用于"从回复正文里删除泄漏的情感词"的匹配模式。
+# ⚠️ 注意: 这些中文别名【只用于清洗回复文本】, 不是 emotion 字段的取值;
+# emotion 字段永远严格取 VALID_EMO 六选一(见 _parse_reply 的白名单校验)。
+_EMO_EN = r'normal|happy|sad|angry|surprise|urgent'
+_EMO_ZH = ('正常|中性|平静|开心|高兴|愉快|快乐|难过|悲伤|伤心|'
+           '生气|愤怒|惊讶|惊喜|意外|紧急')
+
+
+def _clean_reply_text(text):
+    """剥除回复正文里泄漏的情感标注(模型偶尔把回复和情感写成一行, 如"正文。normal")。
+    返回清洗后的正文; 若被剥空/判为低质返回 None, 交由调用方走兜底。
+
+    判据(关键): 情感词若紧跟在【中文字】后面(如"恢复正常""我很开心")= 合法正文, 保留;
+    若前面是标点/空格/英文字母(如"活跃。正常""coach正常")= 泄漏, 剥除。
+    另: 含日文假名 = 模型串语言的低质样本, 直接判废走兜底。"""
+    s = text.strip()
+    if re.search(r'[぀-ヿ]', s):        # 平假名/片假名 → 串语言垃圾
+        return None
+    s = re.sub(r'\{[^{}]*\}\s*$', '', s).strip()                     # 尾随 JSON 片段
+    s = re.sub(r'(的情感|情感|emotion)\s*[：:]\s*[a-zA-Z一-鿿]*\s*$',
+               '', s, flags=re.I).strip()                            # "情感:xxx"/"emotion:xxx"
+    for _ in range(3):
+        prev = s
+        s = re.sub(r'[\s,，、。！？!?]*(?:' + _EMO_EN + r')\s*$', '', s, flags=re.I).strip()  # 英文情感词一律剥
+        # 中文情感词: 仅当其前非中文字(标点/空格/字母)才算泄漏 → 剥, 保留正文里的"恢复正常"等
+        s = re.sub(r'(?<![一-鿿])(?:' + _EMO_ZH + r')\s*$', '', s).strip()
+        s = re.sub(r'[，、\s]+$', '', s).strip()     # 去剥离后遗留的尾随逗号/顿号/空格(保留句末标点)
+        if s == prev:
+            break
+    return s if len(s) >= 4 else None
+
+
 def _parse_reply(gen):
     """三级容错解析 → (reply|None, emotion)。
     ①两行协议 "回复:… / 情感:…";②严格 JSON {"reply":…};
@@ -73,6 +105,7 @@ def _parse_reply(gen):
             body = body.strip("`").strip()
             reply = body.splitlines()[0].strip() if body else ""
     reply = reply.strip('"“”').strip()
+    reply = _clean_reply_text(reply)          # 剥泄漏的情感词(修 "正文。normal" 一行混合体)
     if (not reply or len(reply) < 4 or len(reply) > 80
             or "无需回应" in reply or "不回应" in reply):
         return None, emo
