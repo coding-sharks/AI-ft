@@ -38,6 +38,17 @@ NOISE_ATTEN_DB_RANGE = (18.0, 30.0)
 # 与 AirportAnnouncement(清晰广播词) 与用户语音过于相似, 默认从空档池剔除。
 GAP_NOISE_EXCLUDE_PATTERN = r"Babble|AirportAnnouncement"
 
+# ---- v3 部署对齐增强(2026-07-09, 治"麦克风 OOD 不开口") ----
+# 空档纹理三态(类型, 权重): noise=衰减真噪声(NOISE_ATTEN_DB_RANGE);
+# zero=数字绝对零(对齐浏览器 noiseSuppression 的归零行为, 实录中 2/3 的帧是这个);
+# floor=极安白噪底(安静房间麦克风底噪, 相对语音 GAP_FLOOR_DB_RANGE 衰减)。
+GAP_STYLES = (("noise", 0.45), ("zero", 0.30), ("floor", 0.25))
+GAP_FLOOR_DB_RANGE = (35.0, 50.0)
+
+# 语音信道模拟: 每轮以此概率对 TTS 语音施加随机信道链
+# (增益/变速/轻混响/频谱倾斜+高通), 缩小"干净合成音 vs 浏览器麦克风"的分布差。
+SPEECH_AUG_PROB = 0.7
+
 # 拼接处淡入淡出窗口(毫秒), 对应论文 fade window ω=20ms。
 # 只对噪声段做边缘 fade(不动语音),消除硬拼接的咔哒声——避免模型把爆音当"说完了"的线索。
 CROSSFADE_MS = 20

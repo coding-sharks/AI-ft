@@ -35,8 +35,9 @@ sys.path.insert(0, str(_REPO))
 import numpy as np  # noqa: E402
 
 from zh_finetune.zh_config import (  # noqa: E402
-    ALIGN_TARGET_MODS, CROSSFADE_MS, GAP_NOISE_EXCLUDE_PATTERN,
-    NOISE_ATTEN_DB_RANGE, TRIM_MIN_KEEP_S, TRIM_TOP_DB, ZH_SYSTEM_PROMPT,
+    ALIGN_TARGET_MODS, CROSSFADE_MS, GAP_FLOOR_DB_RANGE, GAP_NOISE_EXCLUDE_PATTERN,
+    GAP_STYLES, NOISE_ATTEN_DB_RANGE, SPEECH_AUG_PROB, TRIM_MIN_KEEP_S, TRIM_TOP_DB,
+    ZH_SYSTEM_PROMPT,
 )
 
 
@@ -88,13 +89,46 @@ def _lazy_imports(use_sf_audio=True):
 
 # ---------- step2 重写: trim + 对齐 + fade ----------
 
-def _trim_speech(src_path, dst_path, top_db):
-    """16k 单声道加载 + 首尾静音修剪; 过度修剪则回退原音频。返回 dst_path。"""
+def _augment_speech(y, rng):
+    """语音信道模拟(v3): 把干净 TTS 折磨成"浏览器麦克风味"。numpy/librosa 实现。
+
+    子操作独立按概率施加: 随机增益(破 TTS 响度归一)、变速±10%(重采样法, 连带音高
+    变化, 模拟语速/声道差异)、轻混响(合成指数衰减 IR)、频谱倾斜+高通(麦克风频响)。
+    """
+    if rng.random() < 0.8:      # 增益 −8~+4 dB(真实麦常偏小声)
+        y = y * (10.0 ** (rng.uniform(-8.0, 4.0) / 20.0))
+    if rng.random() < 0.5:      # 变速(+音高)
+        rate = rng.uniform(0.9, 1.1)
+        y = librosa.resample(y.astype(np.float32), orig_sr=16000,
+                             target_sr=int(16000 * rate))
+    if rng.random() < 0.4:      # 轻混响
+        n = int(rng.uniform(0.05, 0.3) * 16000)
+        ir = rng.standard_normal(n).astype(np.float32) * np.exp(-6.0 * np.arange(n) / n)
+        wet = np.convolve(y, ir)[: len(y)]
+        peak_y, peak_w = np.abs(y).max() + 1e-9, np.abs(wet).max() + 1e-9
+        y = (1.0 - 0.25) * y + 0.25 * wet * (peak_y / peak_w)
+    if rng.random() < 0.5:      # 频谱倾斜 + 高通
+        Y = np.fft.rfft(y)
+        f = np.fft.rfftfreq(len(y), 1.0 / 16000)
+        tilt = (np.maximum(f, 50.0) / 1000.0) ** rng.uniform(-0.25, 0.25)
+        hp = 1.0 / (1.0 + (rng.uniform(60.0, 150.0) / np.maximum(f, 1.0)) ** 2)
+        y = np.fft.irfft(Y * tilt * hp, len(y))
+    y = np.asarray(y, dtype=np.float32)
+    peak = np.abs(y).max()
+    if peak > 0.99:
+        y = y * (0.99 / peak)
+    return y
+
+
+def _trim_speech(src_path, dst_path, top_db, aug_rng=None):
+    """16k 单声道加载 + 首尾静音修剪(+可选信道模拟); 过度修剪则回退原音频。"""
     y, _ = librosa.load(src_path, sr=16000, mono=True)
     yt, _ = librosa.effects.trim(y, top_db=top_db)
     if len(yt) < int(TRIM_MIN_KEEP_S * 16000):
         yt = y
-    sf.write(dst_path, yt.astype(np.float32), 16000)
+    if aug_rng is not None:
+        yt = _augment_speech(yt, aug_rng)
+    sf.write(dst_path, np.asarray(yt, dtype=np.float32), 16000)
     return dst_path
 
 
@@ -143,23 +177,44 @@ def _step2_one_record(line):
     rec = json.loads(line)
     try:
         random.seed(_W["seed"] * 1_000_003 + int(rec["idx"]))
+        nprng = np.random.default_rng(_W["seed"] * 1_000_003 + int(rec["idx"]))
         chunk_size, fade_n = _W["chunk_size"], _W["fade_n"]
         align_mods = _W["align_mods"]        # tuple 或 None(关闭对齐)
         atten_range = _W["atten_db"]         # (lo,hi) 或 None(关闭增益控制)
+        gap_styles = _W["gap_styles"]        # ((name,weight),...) 或 None(仅真噪声)
+        aug_prob = _W["speech_aug_prob"]     # 0=关闭信道模拟
         delays = []
 
-        # ---- pass 1: 修剪并载入全部语音段, 求本对话语音 RMS 基准 ----
+        # ---- pass 1: 修剪(+信道模拟)并载入全部语音段, 求本对话语音 RMS 基准 ----
         speeches = []
         for k, t in enumerate(rec["turns"]):
+            aug = nprng if (aug_prob > 0 and nprng.random() < aug_prob) else None
             trimmed = _trim_speech(
                 t["audio_path"],
                 os.path.join(_W["trimmed_dir"], f"{rec['idx']}_{k}.wav"),
-                _W["trim_top_db"],
+                _W["trim_top_db"], aug_rng=aug,
             )
             speeches.append(up._load_audio_aligned(trimmed))
         speech_db = _rms_db(np.concatenate([s for s, _ in speeches]))
 
+        def _pick_gap_style():
+            if not gap_styles:
+                return "noise"
+            names = [n for n, _ in gap_styles]
+            w = np.array([x for _, x in gap_styles], dtype=np.float64)
+            return str(nprng.choice(names, p=w / w.sum()))
+
         def _gap_noise(path, start_s, n_samples):
+            """v3 三态空档: 衰减真噪声 / 数字零(浏览器NS) / 极安白噪底。"""
+            if n_samples <= 0:
+                return np.zeros(0, dtype=np.float32)
+            style = _pick_gap_style()
+            if style == "zero":
+                return np.zeros(n_samples, dtype=np.float32)
+            if style == "floor":
+                amp = 10.0 ** ((speech_db - nprng.uniform(*_W["floor_db"])) / 20.0)
+                return _fade_edges(
+                    (nprng.standard_normal(n_samples) * amp).astype(np.float32), fade_n)
             noise = _load_noise_wrap(path, start_s, n_samples)
             if atten_range is not None and len(noise):
                 target_db = speech_db - random.uniform(*atten_range)
@@ -212,6 +267,7 @@ def _step2_worker_init():
 
 def step2_concat_audio_zh(input_jsonl, output_jsonl, wavs_dir, trimmed_dir, *,
                           chunk_size, align_mods, atten_db, trim_top_db,
+                          gap_styles=GAP_STYLES, speech_aug_prob=SPEECH_AUG_PROB,
                           seed=1337, workers=1):
     """上游 step2 的替代实现: [噪声→语音]×N→尾噪声, 带 trim/随机对齐/增益控制/fade。
 
@@ -229,6 +285,7 @@ def step2_concat_audio_zh(input_jsonl, output_jsonl, wavs_dir, trimmed_dir, *,
         trim_top_db=trim_top_db,
         fade_n=int(CROSSFADE_MS / 1000 * 16000),
         wavs_dir=wavs_dir, trimmed_dir=trimmed_dir,
+        gap_styles=gap_styles, floor_db=GAP_FLOOR_DB_RANGE, speech_aug_prob=speech_aug_prob,
     ))
 
     from tqdm import tqdm
@@ -283,12 +340,15 @@ def _report_gap_contrast(step2_jsonl, n_check=3):
                 for t in rec["turns"]:
                     nL = t["leading_silence_frames"] * SAMPLES_PER_FRAME
                     nA = t["audio_frames"] * SAMPLES_PER_FRAME
-                    if nL:
-                        gp_db.append(_rms_db(wav[pos:pos + nL]))
+                    gap = wav[pos:pos + nL]
+                    # v3 的数字零空档不计入响度对比(其对比无穷大, 会掩盖真噪声空档的回归)
+                    if nL and float(np.abs(gap).max()) > 0:
+                        gp_db.append(_rms_db(gap))
                     pos += nL
                     sp_db.append(_rms_db(wav[pos:pos + nA]))
                     pos += nA
-                checked.append(np.mean(sp_db) - np.mean(gp_db))
+                if gp_db:
+                    checked.append(np.mean(sp_db) - np.mean(gp_db))
         contrast = float(np.mean(checked))
         flag = "✓" if contrast >= 15 else "⚠️ 过小, 模型可能学不到开口时机!"
         print(f"[响度] 语音比空档噪声高 {contrast:.1f} dB (抽样 {len(checked)} 条) {flag}")
@@ -384,6 +444,8 @@ def main():
                     help="关闭空档噪声增益控制(危险: 会复现'训后不开口'坍缩)")
     ap.add_argument("--gap-noise-exclude", default=GAP_NOISE_EXCLUDE_PATTERN,
                     help="空档噪声池按文件名剔除的正则(前景人声类)。空串=不剔除")
+    ap.add_argument("--no-v3-aug", action="store_true",
+                    help="关闭 v3 部署对齐增强(空档三态+语音信道模拟), 回到纯衰减噪声空档")
     ap.add_argument("--trim-top-db", type=float, default=TRIM_TOP_DB)
     ap.add_argument("--min-noise-len", type=int, default=20)
     ap.add_argument("--max-noise-len", type=int, default=60)
@@ -423,7 +485,10 @@ def main():
         step2_concat_audio_zh(
             s1, s2, wavs, trimmed,
             chunk_size=args.chunk_size, align_mods=align_mods, atten_db=atten_db,
-            trim_top_db=args.trim_top_db, seed=args.seed, workers=args.workers,
+            trim_top_db=args.trim_top_db,
+            gap_styles=None if args.no_v3_aug else GAP_STYLES,
+            speech_aug_prob=0.0 if args.no_v3_aug else SPEECH_AUG_PROB,
+            seed=args.seed, workers=args.workers,
         )
     if "3" not in skip:
         up.step3_extract_features(
