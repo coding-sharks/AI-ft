@@ -113,43 +113,55 @@ def stage_select(aishell_tgz, workdir, n_utts, min_chars, max_chars,
             utts[spk.group(1)].append((uid, text))
     print(f"[select] 过滤后: {sum(len(v) for v in utts.values())} 句 / {len(utts)} 说话人")
 
-    # 3) 按说话人组对话(同一对话内同一说话人), 轮数 3~6 随机, 直到抽满 n_utts
+    # 3) 按说话人组对话(同一对话内同一说话人), 轮数 3~6 随机, 直到抽满 n_utts。
+    # 说话人轮转采样: 每轮每个说话人只出 1 条对话 —— 让 12k 句尽量铺满全部 ~400 个
+    # 真人音色(这批数据的使命就是音色/信道多样性; 顺序耗尽式只会用到 ~34 人)。
     speakers = sorted(utts.keys())
     rng.shuffle(speakers)
-    dialogs, total = [], 0
+    pools = {}
     for spk in speakers:
-        pool = utts[spk][:]
-        rng.shuffle(pool)
-        i = 0
-        while i + turns_per_dialog[0] <= len(pool) and total < n_utts:
-            k = rng.randint(*turns_per_dialog)
-            chunk = pool[i:i + k]
-            i += k
-            if len(chunk) < turns_per_dialog[0]:
+        p = utts[spk][:]
+        rng.shuffle(p)
+        pools[spk] = p
+    dialogs, total = [], 0
+    while total < n_utts:
+        progressed = False
+        for spk in speakers:
+            if total >= n_utts:
                 break
-            dialogs.append({"speaker": spk, "utts": chunk})
-            total += len(chunk)
-        if total >= n_utts:
-            break
-    print(f"[select] 组成对话 {len(dialogs)} 条 / 共 {total} 句")
-
-    # 4) 只解压被选中说话人的内层 tar.gz
-    need = sorted({d["speaker"] for d in dialogs})
-    with tarfile.open(aishell_tgz, "r:gz") as tf:
-        members = {os.path.basename(m.name): m for m in tf
-                   if m.name.endswith(".tar.gz")}
-        for j, spk in enumerate(need):
-            inner_name = f"{spk}.tar.gz"
-            if inner_name not in members:
-                print(f"[select][warn] 缺内层包 {inner_name}")
+            pool = pools[spk]
+            if len(pool) < turns_per_dialog[0]:
                 continue
-            tf.extract(members[inner_name], workdir / "inner")
-            inner_path = next((workdir / "inner").rglob(inner_name))
+            k = min(rng.randint(*turns_per_dialog), len(pool))
+            dialogs.append({"speaker": spk, "utts": pool[:k]})
+            pools[spk] = pool[k:]
+            total += k
+            progressed = True
+        if not progressed:
+            break
+    n_spk = len({d["speaker"] for d in dialogs})
+    print(f"[select] 组成对话 {len(dialogs)} 条 / 共 {total} 句 / 覆盖说话人 {n_spk}")
+
+    # 4) 只解压被选中说话人的内层 tar.gz。
+    # ⚠️ 必须单遍顺序流式抽取: gzip 不可随机寻址, 先建索引再逐个 extract 会让
+    # 每次 extract 都从头重新解压 15.6GB(几十个说话人=数百 GB 重复解压, 数小时)。
+    need = {f"{d['speaker']}.tar.gz" for d in dialogs}
+    done = 0
+    with tarfile.open(aishell_tgz, "r|gz") as tf:   # 流模式, 严格顺序单遍
+        for m in tf:
+            base = os.path.basename(m.name)
+            if base not in need:
+                continue
+            tf.extract(m, workdir / "inner")
+            inner_path = next((workdir / "inner").rglob(base))
             with tarfile.open(inner_path, "r:gz") as itf:
                 itf.extractall(src_root)
             inner_path.unlink()
-            if (j + 1) % 20 == 0:
-                print(f"[select] 解压说话人 {j+1}/{len(need)}")
+            done += 1
+            if done % 10 == 0 or done == len(need):
+                print(f"[select] 解压说话人 {done}/{len(need)}")
+            if done == len(need):
+                break
     # 建 utt_id -> wav 路径索引
     wav_index = {p.stem: str(p) for p in src_root.rglob("*.wav")}
     print(f"[select] 解压 wav {len(wav_index)} 个")
