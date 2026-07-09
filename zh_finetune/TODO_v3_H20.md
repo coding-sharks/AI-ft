@@ -77,15 +77,24 @@ for tag, db in [("loud3db", 3.0), ("quiet24db", 24.0)]:
       **同一条记录连写 3~5 行**(=上采样)。
 - [ ] 另留 **10~20 条实录不进 data.jsonl** —— held-out 验收集(Task 6 用)。
 
-### 4B 开源真人语音混入(强烈建议,约 1 天,把真人占比拉到 ~25-40%)
-- [ ] 下载 **AISHELL-1**(openslr.org/33,~178h/141k 条 16kHz 中文——就是论文原配方
-      里的那个语料);机器需代理(star-proxy)。
-- [ ] 抽 **3,000~5,000 条**语句;**按 speaker ID 分组**,同说话人 3~6 句拼成一条
-      多轮对话(一条对话内必须同一说话人,模拟同一用户连续提问)。
-- [ ] 每句用 LLM 依据其转写文本生成自然中文回应(对陈述句就自然接话/评论,
-      emotion 默认 normal),按 4A 同样格式与路径约定追加(dialog 前缀 `aishell-`)。
-- [ ] **⚠️ 铁律:所有真人语音轮必须配回复,绝不许标 `<no need to response>`** ——
-      把真人声标成"不回应"等于亲手重新教出"真人声→沉默"这个病。
+### 4B 开源真人语音混入 —— ✅ 已由 A100 侧代工完成,直接取用(无需下载 AISHELL 原始包!)
+
+成品数据仓:**https://github.com/coding-sharks/AI-ft-data**(公开,匿名可 clone)
+内容:AISHELL-1 抽样 **12,000 句 / 2,681 条多轮对话 / 覆盖全部 400 个说话人**,
+Qwen2.5-7B-Instruct 生成回复(0 兜底 / 99% 唯一 / 0 违禁词),16kHz FLAC 0.81GB;
+已用 convert_to_online_input.py 实测 12,000 配对 0 缺失(依赖其 .wav→.flac 回退,
+AI-ft 需 ≥ ea8dea8)。
+
+H20 侧三条命令:
+```bash
+git clone https://github.com/coding-sharks/AI-ft-data.git /tmp/AI-ft-data
+cp -r /tmp/AI-ft-data/audio/aishell-* \
+      /apdcephfs/private_giannishu/api_call/data_finetuning/moss-zh/
+cat /tmp/AI-ft-data/aishell_mix.jsonl >> /path/to/合并后的data.jsonl
+```
+- [ ] 执行上面三条(与 4A 合并到同一个 data.jsonl)
+- [ ] **⚠️ 铁律不变:真人语音轮全部已配回复;后续自行加数据时也绝不许标
+      `<no need to response>`**(会重新教出"真人声→沉默")。
 
 ### 4C 配比核算(写进汇报)
 合并后统计:真人对话条数 /(TTS 9k + 真人)应落在 **25%~40%**;
