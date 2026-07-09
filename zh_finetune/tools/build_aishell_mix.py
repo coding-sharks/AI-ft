@@ -39,8 +39,7 @@ SYS_PROMPT = (
     "你是一个中文语音助手。用户对你说了一句话(可能是陈述句、新闻播报腔或提问),"
     "你要给出简短、自然、口语化的中文回应(10~40字):陈述句就自然接话/简评/补充,"
     "提问就直接回答。绝对不要回复'无需回应'或表示不理睬。"
-    '严格只输出一行 JSON: {"reply":"...","emotion":"normal"}'
-    ",emotion 只能取 happy/sad/angry/surprise/normal/urgent 之一(拿不准就 normal)。"
+    "输出恰好两行:\n回复:<你的回应>\n情感:<happy/sad/angry/surprise/normal/urgent 之一, 拿不准写 normal>"
 )
 FALLBACK_REPLIES = [
     "嗯,你说的这个我明白了,还有什么想聊的吗?",
@@ -48,6 +47,36 @@ FALLBACK_REPLIES = [
     "好的,这个信息我记下了,你可以接着说。",
     "明白,这事儿确实挺有意思的。",
 ]
+
+
+def _parse_reply(gen):
+    """三级容错解析 → (reply|None, emotion)。
+    ①两行协议 "回复:… / 情感:…";②严格 JSON {"reply":…};
+    ③观测到的混合体: 纯文本回复 + 尾随 {"emotion":…}(或裸文本)。"""
+    emo = "normal"
+    m = re.search(r"情感\s*[::]\s*([a-zA-Z]+)", gen)
+    if not m:
+        m = re.search(r'"emotion"\s*:\s*"([a-zA-Z]+)"', gen)
+    if m and m.group(1).lower() in VALID_EMO:
+        emo = m.group(1).lower()
+
+    r = re.search(r"回复\s*[::]\s*(.+)", gen)
+    if r:
+        reply = r.group(1).strip()
+    else:
+        j = re.search(r'\{[^{}]*"reply"\s*:\s*"([^"]+)"[^{}]*\}', gen, re.S)
+        if j:
+            reply = j.group(1).strip()
+        else:
+            # 混合体/裸文本: 去掉尾随 JSON 片段与代码栅栏后取正文
+            body = re.sub(r"\{[^{}]*\}\s*$", "", gen).strip()
+            body = body.strip("`").strip()
+            reply = body.splitlines()[0].strip() if body else ""
+    reply = reply.strip('"“”').strip()
+    if (not reply or len(reply) < 4 or len(reply) > 80
+            or "无需回应" in reply or "不回应" in reply):
+        return None, emo
+    return reply[:60], emo
 
 
 # ---------------- stage: select ----------------
@@ -151,7 +180,7 @@ def stage_replies(workdir, qwen_dir, batch_size, device):
 
     tok = AutoTokenizer.from_pretrained(qwen_dir, padding_side="left")
     model = AutoModelForCausalLM.from_pretrained(
-        qwen_dir, torch_dtype=torch.bfloat16, device_map=device)
+        qwen_dir, dtype=torch.bfloat16, device_map=device)  # 需 accelerate(requirements 已含)
     model.eval()
 
     replies = []
@@ -169,20 +198,10 @@ def stage_replies(workdir, qwen_dir, batch_size, device):
                                  pad_token_id=tok.pad_token_id or tok.eos_token_id)
         for j, seq in enumerate(out):
             gen = tok.decode(seq[enc["input_ids"].shape[1]:], skip_special_tokens=True)
-            m = re.search(r'\{[^{}]*"reply"[^{}]*\}', gen, re.S)
-            reply, emo = None, "normal"
-            if m:
-                try:
-                    obj = json.loads(m.group(0))
-                    reply = str(obj.get("reply", "")).strip()
-                    e = str(obj.get("emotion", "normal")).strip().lower()
-                    emo = e if e in VALID_EMO else "normal"
-                except Exception:
-                    pass
-            if not reply or len(reply) < 4 or "无需回应" in reply or "不回应" in reply:
-                reply = random.choice(FALLBACK_REPLIES)
-                emo = "normal"
-            replies.append({"reply": reply[:60], "emotion": emo})
+            reply, emo = _parse_reply(gen)
+            if reply is None:
+                reply, emo = random.choice(FALLBACK_REPLIES), "normal"
+            replies.append({"reply": reply, "emotion": emo})
 
     with open(workdir / "replies.jsonl", "w", encoding="utf-8") as f:
         for r in replies:

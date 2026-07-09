@@ -8,6 +8,7 @@ torch
 torchaudio
 transformers==4.57.6
 tokenizers
+accelerate            # tools/build_aishell_mix.py 的 device_map 加载需要
 safetensors
 lightning>=2.4
 torchmetrics
