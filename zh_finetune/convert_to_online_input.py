@@ -103,6 +103,11 @@ def convert_record(rec, audio_root, stubs, stub_counter):
                 stub_counter[0] += 1
             else:
                 ap = f"{audio_root}/{did}/{did}_turn{u['turn_idx']}.wav"
+                # 音频可能以无损 flac 交付(体积减半, GitHub Release 友好); wav 不存在则回退 flac
+                if not os.path.isfile(ap):
+                    flac = ap[:-4] + ".flac"
+                    if os.path.isfile(flac):
+                        ap = flac
             conv.append({"audio_path": ap, "assistant": a["text"], "emotion": emo})
             i += 2
         else:
