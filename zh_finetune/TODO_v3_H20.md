@@ -96,6 +96,18 @@ cat /tmp/AI-ft-data/aishell_mix.jsonl >> /path/to/合并后的data.jsonl
 - [ ] **⚠️ 铁律不变:真人语音轮全部已配回复;后续自行加数据时也绝不许标
       `<no need to response>`**(会重新教出"真人声→沉默")。
 
+### 4B-2 RAMC 自发提问切片 —— ✅ 已上线同一数据仓(2026-07-13)
+
+**ramc-mix-v1**:MagicData-RAMC(180h 真人自由对话, 手机信道)切出 **10,000 条
+单句提问**(60% 强疑问句 / 662 个说话人 / 16k FLAC 1.4GB / 单轮对话格式)。
+与 aishell 互补:aishell 补音色广度(朗读), ramc 补**自发口语韵律+真实疑问句**。
+回复未预生成——**H20 侧用 DeepSeek API 配回复**(需向人类用户要 API key):
+
+- [ ] 按数据仓的 **`RAMC_GUIDE.md`** 逐步执行(clone → gen_replies_deepseek.py →
+      合入 data.jsonl;脚本断点续跑, 质检标准写在指引里)
+- [ ] 4C 配比核算把 ramc 一并计入:真人(12k aishell + 10k ramc)/ 总数应落 25%~50%
+- [ ] ⚠️ RAMC 为科研许可:数据用完通知人类用户把 AI-ft-data 仓转 private, 勿外传
+
 ### 4C 配比核算(写进汇报)
 合并后统计:真人对话条数 /(TTS 9k + 真人)应落在 **25%~40%**;
 不足则加大 4A 上采样倍数或 4B 抽样量。
