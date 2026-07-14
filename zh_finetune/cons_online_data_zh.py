@@ -35,9 +35,9 @@ sys.path.insert(0, str(_REPO))
 import numpy as np  # noqa: E402
 
 from zh_finetune.zh_config import (  # noqa: E402
-    ALIGN_TARGET_MODS, CROSSFADE_MS, GAP_FLOOR_DB_RANGE, GAP_NOISE_EXCLUDE_PATTERN,
-    GAP_STYLES, NOISE_ATTEN_DB_RANGE, SPEECH_AUG_PROB, TRIM_MIN_KEEP_S, TRIM_TOP_DB,
-    ZH_SYSTEM_PROMPT,
+    ALIGN_TARGET_MODS, BED_AMBIENT_EXTRA_DB, BED_PROB, BED_SNR_DB_RANGE, CROSSFADE_MS,
+    GAP_FLOOR_DB_RANGE, GAP_NOISE_EXCLUDE_PATTERN, GAP_STYLES, NOISE_ATTEN_DB_RANGE,
+    SPEECH_AUG_PROB, TRIM_MIN_KEEP_S, TRIM_TOP_DB, ZH_SYSTEM_PROMPT,
 )
 
 
@@ -155,6 +155,31 @@ def _fade_edges(seg, fade_samples):
     return seg
 
 
+def _tile_crossfade(noise_path, start_s, n_samples, fade_n):
+    """把噪声文件平铺到 n_samples 长, 接缝处交叉淡化(overlap-add), 消除循环点咔哒。
+
+    与 _load_noise_wrap 的差别: wrap 是模运算硬接缝(空档段短、接缝少, 可接受);
+    噪声床横贯整条样本(可达数分钟), 硬接缝会周期性制造"伪边界", 必须交叉淡化。
+    """
+    full = whisper.load_audio(noise_path, sr=16000)
+    if len(full) == 0:
+        return np.zeros(n_samples, dtype=np.float32)
+    start = int(round(start_s * 16000)) % len(full)
+    full = np.concatenate([full[start:], full[:start]]).astype(np.float32)
+    if len(full) <= fade_n * 2:
+        return _load_noise_wrap(noise_path, start_s, n_samples)
+    out = np.zeros(n_samples + len(full), dtype=np.float32)
+    ramp = np.linspace(0.0, 1.0, fade_n, dtype=np.float32)
+    tile = full.copy()
+    tile[:fade_n] *= ramp
+    tile[-fade_n:] *= ramp[::-1]
+    pos = 0
+    while pos < n_samples:
+        out[pos:pos + len(tile)] += tile
+        pos += len(tile) - fade_n            # 重叠 fade_n → 接缝处功率近似恒定
+    return out[:n_samples]
+
+
 # step2 多进程 worker 配置(fork 继承; Linux 默认 fork 启动方式)
 _W = {}
 
@@ -197,6 +222,9 @@ def _step2_one_record(line):
             speeches.append(up._load_audio_aligned(trimmed))
         speech_db = _rms_db(np.concatenate([s for s, _ in speeches]))
 
+        # v4 噪声床: 本条样本是否走"连续噪声床"样式(空档=纯床, 语音上也叠床)
+        use_bed = _W["bed_prob"] > 0 and nprng.random() < _W["bed_prob"]
+
         def _pick_gap_style():
             if not gap_styles:
                 return "noise"
@@ -205,9 +233,12 @@ def _step2_one_record(line):
             return str(nprng.choice(names, p=w / w.sum()))
 
         def _gap_noise(path, start_s, n_samples):
-            """v3 三态空档: 衰减真噪声 / 数字零(浏览器NS) / 极安白噪底。"""
+            """v3 三态空档: 衰减真噪声 / 数字零(浏览器NS) / 极安白噪底。
+            床样式下空档=纯零(之后整条叠床, 空档处只剩床——即论文的连续噪声形态)。"""
             if n_samples <= 0:
                 return np.zeros(0, dtype=np.float32)
+            if use_bed:
+                return np.zeros(n_samples, dtype=np.float32)
             style = _pick_gap_style()
             if style == "zero":
                 return np.zeros(n_samples, dtype=np.float32)
@@ -250,8 +281,30 @@ def _step2_one_record(line):
                                    tail * SAMPLES_PER_FRAME))
         rec["tail_silence_frames_actual"] = tail
 
+        y = np.concatenate(segments)
+
+        # ---- v4 噪声床叠加(整条, 含语音段): 事件轨 + 环境轨(再低 BED_AMBIENT_EXTRA_DB) ----
+        if use_bed:
+            snr = float(nprng.uniform(*_W["bed_snr"]))
+            fade_n = _W["fade_n"]
+            event = _tile_crossfade(rec["tail_noise_path"],
+                                    rec["tail_noise_start_s"], len(y), fade_n)
+            ambient = _tile_crossfade(rec["turns"][0]["leading_noise_path"],
+                                      rec["turns"][0]["leading_noise_start_s"],
+                                      len(y), fade_n)
+            for track, extra in ((event, 0.0), (ambient, _W["bed_ambient_extra"])):
+                t_db = _rms_db(track)
+                if np.isfinite(t_db) and t_db > -100:
+                    y = y + track * (10.0 ** ((speech_db - snr - extra - t_db) / 20.0))
+            peak = float(np.abs(y).max())
+            if peak > 0.99:
+                y = y * (0.99 / peak)
+            rec["gap_mode"], rec["bed_snr_db"] = "bed", round(snr, 1)
+        else:
+            rec["gap_mode"] = "v3"
+
         wav_path = os.path.join(_W["wavs_dir"], f"{rec['idx']}.wav")
-        up._write_wav(wav_path, np.concatenate(segments))
+        up._write_wav(wav_path, y)
         rec["concat_wav_path"] = wav_path
         return json.dumps(rec, ensure_ascii=False) + "\n", delays, None
     except Exception as e:
@@ -268,7 +321,7 @@ def _step2_worker_init():
 def step2_concat_audio_zh(input_jsonl, output_jsonl, wavs_dir, trimmed_dir, *,
                           chunk_size, align_mods, atten_db, trim_top_db,
                           gap_styles=GAP_STYLES, speech_aug_prob=SPEECH_AUG_PROB,
-                          seed=1337, workers=1):
+                          bed_prob=BED_PROB, seed=1337, workers=1):
     """上游 step2 的替代实现: [噪声→语音]×N→尾噪声, 带 trim/随机对齐/增益控制/fade。
 
     帧数计算完全复用上游 `_load_audio_aligned`(对修剪后的 wav 调用),
@@ -286,6 +339,7 @@ def step2_concat_audio_zh(input_jsonl, output_jsonl, wavs_dir, trimmed_dir, *,
         fade_n=int(CROSSFADE_MS / 1000 * 16000),
         wavs_dir=wavs_dir, trimmed_dir=trimmed_dir,
         gap_styles=gap_styles, floor_db=GAP_FLOOR_DB_RANGE, speech_aug_prob=speech_aug_prob,
+        bed_prob=bed_prob, bed_snr=BED_SNR_DB_RANGE, bed_ambient_extra=BED_AMBIENT_EXTRA_DB,
     ))
 
     from tqdm import tqdm
@@ -325,16 +379,24 @@ def step2_concat_audio_zh(input_jsonl, output_jsonl, wavs_dir, trimmed_dir, *,
     _report_gap_contrast(output_jsonl)
 
 
-def _report_gap_contrast(step2_jsonl, n_check=3):
-    """构造质量守门: 抽样报告"语音 vs 空档噪声"的响度差。
-    差值应 ≥ ~15dB —— 否则模型听不到"说完变安静"的边界(坍缩为永远沉默的根因)。"""
+def _report_gap_contrast(step2_jsonl, n_check=6):
+    """构造质量守门: 分样式抽样报告"语音 vs 空档"的响度差。
+    v3 空档样式: 差值应 ≥ ~15dB(否则复现"训后不开口"坍缩);
+    bed 噪声床样式: 差值即实际 SNR, 应落在 BED_SNR_DB_RANGE(约 4~21dB)——
+    这里的边界线索是"语音消失、床还在", 不要求空档安静。"""
     try:
-        checked = []
+        checked = {"v3": [], "bed": []}
+        n_mode = {"v3": 0, "bed": 0}
+        snrs = []
         with open(step2_jsonl, encoding="utf-8") as f:
-            for i, line in enumerate(f):
-                if i >= n_check:
-                    break
+            for line in f:
                 rec = json.loads(line)
+                mode = rec.get("gap_mode", "v3")
+                n_mode[mode] += 1
+                if mode == "bed" and "bed_snr_db" in rec:
+                    snrs.append(rec["bed_snr_db"])
+                if len(checked[mode]) >= n_check:
+                    continue
                 wav, _ = sf.read(rec["concat_wav_path"], dtype="float32")
                 pos, sp_db, gp_db = 0, [], []
                 for t in rec["turns"]:
@@ -348,10 +410,21 @@ def _report_gap_contrast(step2_jsonl, n_check=3):
                     sp_db.append(_rms_db(wav[pos:pos + nA]))
                     pos += nA
                 if gp_db:
-                    checked.append(np.mean(sp_db) - np.mean(gp_db))
-        contrast = float(np.mean(checked))
-        flag = "✓" if contrast >= 15 else "⚠️ 过小, 模型可能学不到开口时机!"
-        print(f"[响度] 语音比空档噪声高 {contrast:.1f} dB (抽样 {len(checked)} 条) {flag}")
+                    checked[mode].append(float(np.mean(sp_db) - np.mean(gp_db)))
+        total = n_mode["v3"] + n_mode["bed"]
+        if n_mode["bed"]:
+            print(f"[床] 噪声床样式 {n_mode['bed']}/{total} 条 "
+                  f"({100 * n_mode['bed'] / total:.0f}%), 目标 SNR "
+                  f"mean={np.mean(snrs):.1f}dB range=[{min(snrs):.0f},{max(snrs):.0f}]dB")
+        if checked["v3"]:
+            c = float(np.mean(checked["v3"]))
+            flag = "✓" if c >= 15 else "⚠️ 过小, 模型可能学不到开口时机!"
+            print(f"[响度] v3空档样式: 语音比空档高 {c:.1f} dB (抽样 {len(checked['v3'])} 条) {flag}")
+        if checked["bed"]:
+            c = float(np.mean(checked["bed"]))
+            flag = "✓" if 3.0 <= c <= 22.0 else "⚠️ 偏离 BED_SNR_DB_RANGE, 检查床增益!"
+            print(f"[响度] bed床样式: 语音比空档高 {c:.1f} dB (抽样 {len(checked['bed'])} 条, "
+                  f"即实测 SNR) {flag}")
     except Exception as e:
         print(f"[响度] 抽样检查失败(不影响构造): {e}")
 
@@ -446,6 +519,9 @@ def main():
                     help="空档噪声池按文件名剔除的正则(前景人声类)。空串=不剔除")
     ap.add_argument("--no-v3-aug", action="store_true",
                     help="关闭 v3 部署对齐增强(空档三态+语音信道模拟), 回到纯衰减噪声空档")
+    ap.add_argument("--bed-prob", type=float, default=BED_PROB,
+                    help="v4 连续噪声床样式的样本占比(0=关闭)。床=事件+环境双轨噪声平铺"
+                         "整条音频(语音段也叠), SNR~U(5,20)dB, 治'带噪真人声不开口'")
     ap.add_argument("--trim-top-db", type=float, default=TRIM_TOP_DB)
     ap.add_argument("--min-noise-len", type=int, default=20)
     ap.add_argument("--max-noise-len", type=int, default=60)
@@ -488,7 +564,7 @@ def main():
             trim_top_db=args.trim_top_db,
             gap_styles=None if args.no_v3_aug else GAP_STYLES,
             speech_aug_prob=0.0 if args.no_v3_aug else SPEECH_AUG_PROB,
-            seed=args.seed, workers=args.workers,
+            bed_prob=args.bed_prob, seed=args.seed, workers=args.workers,
         )
     if "3" not in skip:
         up.step3_extract_features(
